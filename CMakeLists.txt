@@ -9,7 +9,6 @@ include(cmake/ExportProject.cmake)
 
 #
 find_package(cppzmq REQUIRED)
-find_package(nlohmann_json REQUIRED)
 
 # ── header-only interface library ──────────────────────────────────────────
 add_library(xbot2_diagnostics INTERFACE)
@@ -19,7 +18,6 @@ target_include_directories(xbot2_diagnostics INTERFACE
 )
 target_link_libraries(xbot2_diagnostics INTERFACE
     cppzmq
-    nlohmann_json::nlohmann_json
 )
 install(TARGETS xbot2_diagnostics
     EXPORT ${PROJECT_NAME}Targets
@@ -41,6 +39,7 @@ add_subdirectory(python)
 include(CTest)
 if(BUILD_TESTING)
     find_package(GTest REQUIRED)
+    find_package(nlohmann_json REQUIRED)
 
     # tests for stats_accumulator
     add_executable(test_stats_accumulator
@@ -48,6 +47,7 @@ if(BUILD_TESTING)
     )
     target_link_libraries(test_stats_accumulator PRIVATE
         xbot2_diagnostics
+    nlohmann_json::nlohmann_json
         GTest::GTest
         GTest::Main
     )
@@ -59,22 +59,23 @@ if(BUILD_TESTING)
     )
     target_link_libraries(test_publisher PRIVATE
         xbot2_diagnostics
+        nlohmann_json::nlohmann_json
         GTest::GTest
         GTest::Main
     )
     add_test(NAME test_publisher COMMAND test_publisher)
+
+    # ── profiling executable ───────────────────────────────────────────────────
+    add_executable(profile_stats_accumulator
+        src/profile_stats_accumulator.cpp
+    )
+    target_link_libraries(profile_stats_accumulator PRIVATE xbot2_diagnostics nlohmann_json::nlohmann_json)
+    target_compile_options(profile_stats_accumulator PRIVATE -O3 -DNDEBUG)
+
+    add_executable(profile_publish
+        src/profile_publish.cpp
+    )
+    target_link_libraries(profile_publish PRIVATE xbot2_diagnostics nlohmann_json::nlohmann_json)
+    target_compile_options(profile_publish PRIVATE -O3 -DNDEBUG)
+
 endif()
-
-# ── profiling executable ───────────────────────────────────────────────────
-add_executable(profile_stats_accumulator
-    src/profile_stats_accumulator.cpp
-)
-target_link_libraries(profile_stats_accumulator PRIVATE xbot2_diagnostics)
-target_compile_options(profile_stats_accumulator PRIVATE -O3 -DNDEBUG)
-
-add_executable(profile_publish
-    src/profile_publish.cpp
-)
-target_link_libraries(profile_publish PRIVATE xbot2_diagnostics)
-target_compile_options(profile_publish PRIVATE -O3 -DNDEBUG)
-

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include <numeric>
+#include <nlohmann/json.hpp>
 
 #include "xbot2_diagnostics/publisher.h"
 
