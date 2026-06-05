@@ -32,7 +32,6 @@ class InfluxDBSection:
 @dataclass(slots=True)
 class RosDiagnosticsSection:
     enabled: bool = False
-    publish_rate_hz: float = 1.0
 
 
 @dataclass(slots=True)
@@ -116,7 +115,6 @@ def load_config(path: str | None = None) -> AggregatorConfig:
             ),
             ros_diagnostics=RosDiagnosticsSection(
                 enabled=_as_bool(_section(sinks, "ros_diagnostics").get("enabled"), False),
-                publish_rate_hz=float(_section(sinks, "ros_diagnostics").get("publish_rate_hz", 1.0)),
             ),
             json_file=JsonFileSection(
                 enabled=_as_bool(_section(sinks, "json_file").get("enabled"), False),
@@ -134,8 +132,6 @@ def load_config(path: str | None = None) -> AggregatorConfig:
         raise ValueError("aggregator.stale_timeout_sec must be > 0")
     if cfg.aggregator.stale_check_interval_sec <= 0:
         raise ValueError("aggregator.stale_check_interval_sec must be > 0")
-    if cfg.sinks.ros_diagnostics.publish_rate_hz <= 0:
-        raise ValueError("sinks.ros_diagnostics.publish_rate_hz must be > 0")
     if cfg.sinks.stdout.interval_sec <= 0:
         raise ValueError("sinks.stdout.interval_sec must be > 0")
     if cfg.sinks.json_file.max_file_size_mb <= 0:

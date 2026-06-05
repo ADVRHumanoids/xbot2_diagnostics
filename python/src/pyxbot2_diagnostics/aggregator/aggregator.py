@@ -13,7 +13,7 @@ from typing import Any, Callable, Protocol
 import zmq
 from jsonschema import ValidationError, validate
 
-from aggregator.config import AggregatorConfig
+from pyxbot2_diagnostics.aggregator.config import AggregatorConfig
 
 LOGGER = logging.getLogger(__name__)
 MESSAGE_SCHEMA_PATH = Path(__file__).resolve().parent / "schema" / "diagnostics_message.schema.json"

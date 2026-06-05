@@ -7,9 +7,9 @@ import logging
 import time
 from typing import Any
 
-from aggregator.aggregator import DiagnosticsAggregator
-from aggregator.config import CONFIG_ENV_VAR, AggregatorConfig, load_config
-from aggregator.sinks import InfluxDBSink, JsonFileSink, RosDiagnosticsSink, StdoutSink
+from pyxbot2_diagnostics.aggregator.aggregator import DiagnosticsAggregator
+from pyxbot2_diagnostics.aggregator.config import CONFIG_ENV_VAR, AggregatorConfig, load_config
+from pyxbot2_diagnostics.aggregator.sinks import InfluxDBSink, JsonFileSink, RosDiagnosticsSink, StdoutSink
 
 LOGGER = logging.getLogger(__name__)
 
@@ -38,6 +38,7 @@ def _build_ros_sink(config: AggregatorConfig) -> RosDiagnosticsSink | None:
         publish_rate_hz=config.sinks.ros_diagnostics.publish_rate_hz,
         publisher=_publish,
         time_fn=time.time,
+        stamp_fn=lambda: node.get_clock().now().to_msg(),
     )
 
 

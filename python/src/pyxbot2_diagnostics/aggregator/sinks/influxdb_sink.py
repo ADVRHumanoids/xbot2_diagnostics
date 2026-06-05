@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from aggregator.aggregator import DiagnosticsMessage
+from pyxbot2_diagnostics.aggregator.aggregator import DiagnosticsMessage
 
 LOGGER = logging.getLogger(__name__)
 

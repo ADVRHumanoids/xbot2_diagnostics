@@ -6,7 +6,7 @@ import json
 import time
 from typing import Callable
 
-from aggregator.aggregator import DiagnosticsMessage
+from pyxbot2_diagnostics.aggregator.aggregator import DiagnosticsMessage
 
 
 class StdoutSink:

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from aggregator.aggregator import DiagnosticsMessage
+from pyxbot2_diagnostics.aggregator.aggregator import DiagnosticsMessage
 
 
 class JsonFileSink:
