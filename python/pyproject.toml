@@ -31,6 +31,9 @@ Repository = "https://github.com/ADVRHumanoids/xbot2_diagnostics"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"pyxbot2_diagnostics.aggregator" = ["schema/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
