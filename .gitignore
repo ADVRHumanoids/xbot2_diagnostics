@@ -1,2 +1,9 @@
 # egg-info
 *.egg-info/
+
+# build artifacts
+build/
+
+# python bytecode
+__pycache__/
+*.py[cod]
