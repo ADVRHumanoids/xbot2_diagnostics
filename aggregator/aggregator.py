@@ -7,13 +7,24 @@ import logging
 import signal
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Protocol
 
 import zmq
+from jsonschema import ValidationError, validate
 
 from aggregator.config import AggregatorConfig
 
 LOGGER = logging.getLogger(__name__)
+MESSAGE_SCHEMA_PATH = Path(__file__).resolve().parent / "schema" / "diagnostics_message.schema.json"
+
+
+def _load_message_schema() -> dict[str, Any]:
+    with MESSAGE_SCHEMA_PATH.open("r", encoding="utf-8") as schema_file:
+        return json.load(schema_file)
+
+
+MESSAGE_SCHEMA = _load_message_schema()
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,28 +84,10 @@ class DiagnosticsAggregator:
     @staticmethod
     def validate_and_normalize_message(raw: Any) -> DiagnosticsMessage:
         """Validate and normalize raw JSON-decoded payload."""
-        if not isinstance(raw, dict):
-            raise ValueError("Message must be an object")
-
-        required = ["v", "node", "hw_id", "stamp", "level", "msg", "values"]
-        missing = [key for key in required if key not in raw]
-        if missing:
-            raise ValueError(f"Missing required fields: {missing}")
-
-        if raw["v"] != 1:
-            raise ValueError("Only schema version 1 is supported")
-        if not isinstance(raw["node"], str) or not raw["node"]:
-            raise ValueError("'node' must be a non-empty string")
-        if not isinstance(raw["hw_id"], str):
-            raise ValueError("'hw_id' must be a string")
-        if not isinstance(raw["stamp"], (int, float)):
-            raise ValueError("'stamp' must be numeric")
-        if not isinstance(raw["level"], int) or raw["level"] not in (0, 1, 2, 3):
-            raise ValueError("'level' must be one of 0,1,2,3")
-        if not isinstance(raw["msg"], str):
-            raise ValueError("'msg' must be a string")
-        if not isinstance(raw["values"], list):
-            raise ValueError("'values' must be a list")
+        try:
+            validate(instance=raw, schema=MESSAGE_SCHEMA)
+        except ValidationError as exc:
+            raise ValueError(f"Schema validation failed: {exc.message}") from exc
 
         normalized_values: list[DiagnosticKeyValue] = []
         for entry in raw["values"]:

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://advrhumanoids.github.io/xbot2_diagnostics/diagnostics_message.schema.json",
+  "title": "XBot2 Diagnostics Message",
+  "type": "object",
+  "required": [
+    "v",
+    "node",
+    "hw_id",
+    "stamp",
+    "level",
+    "msg",
+    "values"
+  ],
+  "properties": {
+    "v": {
+      "const": 1
+    },
+    "node": {
+      "type": "string",
+      "minLength": 1
+    },
+    "hw_id": {
+      "type": "string"
+    },
+    "stamp": {
+      "type": "number"
+    },
+    "level": {
+      "type": "integer",
+      "enum": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    "msg": {
+      "type": "string"
+    },
+    "values": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "key",
+              "value"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "minLength": 1
+              },
+              "value": {}
+            }
+          },
+          {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "prefixItems": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {}
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

@@ -138,6 +138,21 @@ def test_schema_validation_rejects_invalid_message() -> None:
         DiagnosticsAggregator.validate_and_normalize_message(invalid)
 
 
+def test_schema_validation_accepts_two_item_values_entries() -> None:
+    valid = {
+        "v": 1,
+        "node": "n1",
+        "hw_id": "hw",
+        "stamp": 0.0,
+        "level": 0,
+        "msg": "OK",
+        "values": [["temperature", 42.0]],
+    }
+    normalized = DiagnosticsAggregator.validate_and_normalize_message(valid)
+    assert normalized.values[0].key == "temperature"
+    assert normalized.values[0].value == 42.0
+
+
 def test_multi_node_different_rates() -> None:
     endpoint = _free_tcp_endpoint()
     ctx = zmq.Context()

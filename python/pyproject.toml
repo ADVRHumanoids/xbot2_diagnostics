@@ -16,6 +16,7 @@ dependencies = [
     "numpy>=1.21",
     "PyYAML>=5.4",
     "pyzmq>=25",
+    "jsonschema>=4.0",
 ]
 
 [project.optional-dependencies]
