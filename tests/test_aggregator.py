@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 import pytest
 import zmq
 
-from aggregator.aggregator import DiagnosticsAggregator
-from aggregator.config import (
+from pyxbot2_diagnostics.aggregator.aggregator import DiagnosticsAggregator
+from pyxbot2_diagnostics.aggregator.config import (
     AggregatorConfig,
     AggregatorSection,
     SinksSection,

@@ -45,6 +45,10 @@ jobs:
         working-directory: build
         run: ctest --output-on-failure --parallel $(nproc)
 
+      - name: Profile
+        working-directory: build
+        run: ./profile_stats_accumulator && ./profile_publish
+
       - name: Install Python package & run Python tests
         run: |
           pip install --quiet ".[dev]" pytest

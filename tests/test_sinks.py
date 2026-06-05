@@ -1,9 +1,9 @@
 import json
 
-from aggregator.aggregator import DiagnosticKeyValue, DiagnosticsMessage
-from aggregator.sinks.influxdb_sink import InfluxDBSink
-from aggregator.sinks.json_file_sink import JsonFileSink
-from aggregator.sinks.ros_diagnostics_sink import RosDiagnosticsSink
+from pyxbot2_diagnostics.aggregator.aggregator import DiagnosticKeyValue, DiagnosticsMessage
+from pyxbot2_diagnostics.aggregator.sinks.influxdb_sink import InfluxDBSink
+from pyxbot2_diagnostics.aggregator.sinks.json_file_sink import JsonFileSink
+from pyxbot2_diagnostics.aggregator.sinks.ros_diagnostics_sink import RosDiagnosticsSink
 
 
 class FakeClock:
@@ -65,22 +65,22 @@ def test_ros_sink_mapping_and_publish_rate() -> None:
     published = []
 
     sink = RosDiagnosticsSink(
-        publish_rate_hz=1.0,
         publisher=published.append,
         time_fn=clock,
     )
 
     sink.publish_state({"n1": _msg("n1")})
     sink.publish_state({"n1": _msg("n1")})
-    assert len(published) == 1
+    assert len(published) == 2
 
     clock.advance(1.1)
     sink.publish_state({"n1": _msg("n1")})
-    assert len(published) == 2
+    assert len(published) == 3
 
     status = published[0].status[0]
     assert status.name == "n1"
     assert status.hardware_id == "hw"
+    assert status.level == RosDiagnosticsSink._to_level(0)
     assert status.values[0].key == "torque_error.mean"
 
 

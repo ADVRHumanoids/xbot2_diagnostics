@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from aggregator.config import CONFIG_ENV_VAR, load_config
+from pyxbot2_diagnostics.aggregator.config import CONFIG_ENV_VAR, load_config
 
 
 def test_load_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
