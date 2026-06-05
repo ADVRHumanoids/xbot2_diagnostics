@@ -3,6 +3,10 @@
 #include <zmq.hpp>
 #include "stats_accumulator.h"
 #include <charconv>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
 #include <string>
 #include <vector>
 #include <functional>
@@ -13,13 +17,18 @@ struct KeyValue { std::string key; double value; };
 
 class DiagPublisher {
 public:
-    DiagPublisher(zmq::context_t& ctx,
-                  std::string node_name,
+    DiagPublisher(std::string node_name,
                   std::string hw_id,
-                  std::string endpoint = "")
-        : socket_(ctx, zmq::socket_type::push),
-          node_(std::move(node_name)), hw_id_(std::move(hw_id))
+                  std::string endpoint = "",
+                  std::shared_ptr<zmq::context_t> ctx = nullptr,
+                  double throttle_publish_interval_sec = 0.0)
+        : ctx_(make_context(std::move(ctx))),
+          socket_(*ctx_, zmq::socket_type::push),
+          node_(std::move(node_name)),
+          hw_id_(std::move(hw_id)),
+          throttle_publish_interval_sec_(throttle_publish_interval_sec)
     {
+
         if (endpoint.empty())
         {
             std::getenv("XBOT_DIAG_ENDPOINT") ?
@@ -34,6 +43,14 @@ public:
     void publish(int level, const std::string& msg,
                  const std::vector<KeyValue>& values = {})
     {
+        // Throttle publish if requested
+        auto now = std::chrono::steady_clock::now();
+        if (throttle_publish_interval_sec_.count() > 0.0 && 
+            now - _last_publish_time < throttle_publish_interval_sec_) {
+            return;
+        }
+        _last_publish_time = now;
+
         _buf.clear();
         _buf += R"({"v":1,"node":")"; _append_escaped(_buf, node_);
         _buf += R"(","hw_id":")";     _append_escaped(_buf, hw_id_);
@@ -58,6 +75,14 @@ public:
                        StatAccumulator& acc,
                        int level = 0, const std::string& msg = "OK")
     {
+        // Throttle publish if requested
+        auto now = std::chrono::steady_clock::now();
+        if (throttle_publish_interval_sec_.count() > 0.0 && 
+            now - _last_publish_time < throttle_publish_interval_sec_) {
+            return;
+        }
+        _last_publish_time = now;
+
         auto st = acc.flush();
         publish(level, msg, {
             {metric_name + ".mean",  st.mean},
@@ -72,6 +97,11 @@ public:
     }
 
 private:
+    static std::shared_ptr<zmq::context_t> make_context(std::shared_ptr<zmq::context_t> ctx)
+    {
+        return ctx ? std::move(ctx) : std::make_shared<zmq::context_t>(1);
+    }
+
     double timestamp_now() {
         using namespace std::chrono;
         auto now = system_clock::now();
@@ -105,9 +135,12 @@ private:
         }
     }
 
+    std::shared_ptr<zmq::context_t> ctx_;
     zmq::socket_t socket_;
     std::string node_, hw_id_;
     std::string _buf;  // reused scratch buffer — zero heap alloc after warm-up
+    std::chrono::duration<double> throttle_publish_interval_sec_;
+    std::chrono::steady_clock::time_point _last_publish_time;
 };
 
 } // namespace XBot::diagnostics

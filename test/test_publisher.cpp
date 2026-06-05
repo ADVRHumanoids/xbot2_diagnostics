@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <cmath>
+#include <memory>
 #include <numeric>
 #include <nlohmann/json.hpp>
 
@@ -15,11 +16,14 @@ static constexpr double kEps = 1e-9;
 
 TEST(DiagPublisher, DefaultConstruction)
 {
-    DiagPublisher pub(*(new zmq::context_t()), "test_node", "test_hw");
+    auto ctx = std::make_shared<zmq::context_t>(1);
+    const std::string endpoint = "inproc://test_publisher_default_construction";
 
     // define zmq subscriber to receive the message published by DiagPublisher
-    zmq::socket_t sub(*(new zmq::context_t()), zmq::socket_type::pull);
-    sub.bind("tcp://*:9268");
+    zmq::socket_t sub(*ctx, zmq::socket_type::pull);
+    sub.bind(endpoint);
+
+    DiagPublisher pub("test_node", "test_hw", endpoint, ctx);
 
     // publish a message
     pub.publish(0, "Test message", {{"metric1", 42.0}, {"metric2", 3.14}});

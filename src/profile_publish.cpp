@@ -2,6 +2,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstdio>
+#include <memory>
 #include <random>
 #include <string>
 #include <thread>
@@ -44,13 +45,13 @@ int main()
     constexpr std::size_t WARMUP  = 1'000;
     const std::string     EP      = "tcp://127.0.0.1:9370";
 
-    zmq::context_t ctx(1);
+    auto ctx = std::make_shared<zmq::context_t>(1);
 
     // start drain thread before connecting the sender
-    std::thread drainer(drain_thread, std::ref(ctx), EP);
+    std::thread drainer(drain_thread, std::ref(*ctx), EP);
     std::this_thread::sleep_for(std::chrono::milliseconds(50)); // let bind settle
 
-    DiagPublisher pub(ctx, "profiler_node", "hw0", EP);
+    DiagPublisher pub("profiler_node", "hw0", EP, ctx);
 
     // pre-build a representative KeyValue list (8 metrics, same as publish_stats)
     std::vector<KeyValue> values = {
