@@ -52,5 +52,6 @@ jobs:
       - name: Install Python package & run Python tests
         run: |
           pip install --quiet ".[dev]" pytest
+          python -m pytest -v tests
         working-directory: python
         if: matrix.build_type == 'Release'
