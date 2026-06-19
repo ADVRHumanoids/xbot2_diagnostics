@@ -11,6 +11,10 @@ def test_load_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.aggregator.zmq_endpoint == "tcp://localhost:5555"
     assert cfg.aggregator.stale_timeout_sec == 5.0
     assert cfg.sinks.influxdb.enabled is False
+    assert cfg.sinks.ros_diagnostics.input_topic == "/diagnostics"
+    assert cfg.sinks.ros_diagnostics.aggregated_topic == "/diagnostics_agg"
+    assert cfg.sinks.ros_diagnostics.publish_aggregated is True
+    assert cfg.sinks.ros_diagnostics.aggregation_root == "Robot"
 
 
 def test_load_config_from_env_with_expansion(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -24,6 +28,12 @@ sinks:
   influxdb:
     enabled: true
     token: "${INFLUXDB_TOKEN}"
+  ros_diagnostics:
+    enabled: true
+    input_topic: "/diagnostics"
+    aggregated_topic: "/robot_monitor/diagnostics_agg"
+    publish_aggregated: true
+    aggregation_root: "Robot"
   stdout:
     enabled: true
     interval_sec: 2.0
@@ -36,11 +46,31 @@ sinks:
     assert cfg.aggregator.zmq_endpoint == "tcp://127.0.0.1:6000"
     assert cfg.sinks.influxdb.enabled is True
     assert cfg.sinks.influxdb.token == "abc123"
+    assert cfg.sinks.ros_diagnostics.enabled is True
+    assert cfg.sinks.ros_diagnostics.input_topic == "/diagnostics"
+    assert cfg.sinks.ros_diagnostics.aggregated_topic == "/robot_monitor/diagnostics_agg"
+    assert cfg.sinks.ros_diagnostics.publish_aggregated is True
+    assert cfg.sinks.ros_diagnostics.aggregation_root == "Robot"
     assert cfg.sinks.stdout.interval_sec == 2.0
 
 
 def test_invalid_config_raises(tmp_path) -> None:
     cfg_path = tmp_path / "bad.yaml"
     cfg_path.write_text("aggregator:\n  stale_timeout_sec: -1\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_config(str(cfg_path))
+
+
+def test_ros_diagnostics_requires_input_topic(tmp_path) -> None:
+    cfg_path = tmp_path / "bad_ros.yaml"
+    cfg_path.write_text(
+        """
+sinks:
+  ros_diagnostics:
+    enabled: true
+    input_topic: ""
+""",
+        encoding="utf-8",
+    )
     with pytest.raises(ValueError):
         load_config(str(cfg_path))

@@ -5,7 +5,12 @@ from dataclasses import dataclass, field
 import pytest
 import zmq
 
-from pyxbot2_diagnostics.aggregator.aggregator import DiagnosticsAggregator
+from pyxbot2_diagnostics.aggregator.aggregator import (
+    DiagnosticKeyValue,
+    DiagnosticsAggregator,
+    DiagnosticsMessage,
+    ZmqDiagnosticsSource,
+)
 from pyxbot2_diagnostics.aggregator.config import (
     AggregatorConfig,
     AggregatorSection,
@@ -39,6 +44,21 @@ class FakeSink:
         return
 
 
+class FakeSource:
+    def __init__(self, polls: list[list[DiagnosticsMessage]]) -> None:
+        self.polls = polls
+        self.closed = False
+
+    def poll(self, timeout_ms: int = 100) -> list[DiagnosticsMessage]:
+        del timeout_ms
+        if not self.polls:
+            return []
+        return self.polls.pop(0)
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def _free_tcp_endpoint() -> str:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", 0))
@@ -60,6 +80,18 @@ def _config(endpoint: str) -> AggregatorConfig:
 
 def _send(push_socket: zmq.Socket, payload: dict) -> None:
     push_socket.send_string(json.dumps(payload))
+
+
+def _message(node: str, *, level: int = 0, msg: str = "OK") -> DiagnosticsMessage:
+    return DiagnosticsMessage(
+        v=1,
+        node=node,
+        hw_id="hw",
+        stamp=1.0,
+        level=level,
+        msg=msg,
+        values=(DiagnosticKeyValue("x", 1),),
+    )
 
 
 def test_state_cache_and_retrieval_with_zmq_fixture() -> None:
@@ -93,6 +125,51 @@ def test_state_cache_and_retrieval_with_zmq_fixture() -> None:
     aggr.close()
 
 
+def test_zmq_and_ros_style_sources_share_cache() -> None:
+    endpoint = _free_tcp_endpoint()
+    ctx = zmq.Context()
+    zmq_source = ZmqDiagnosticsSource(endpoint, context=ctx)
+    ros_source = FakeSource([[_message("ros/node")]])
+    sink = FakeSink()
+    aggr = DiagnosticsAggregator(
+        _config(endpoint), [sink], sources=[zmq_source, ros_source], time_fn=FakeClock()
+    )
+
+    pub = ctx.socket(zmq.PUSH)
+    pub.connect(endpoint)
+    _send(
+        pub,
+        {
+            "v": 1,
+            "node": "zmq/node",
+            "hw_id": "hw",
+            "stamp": 1.0,
+            "level": 0,
+            "msg": "OK",
+            "values": [{"key": "x", "value": 1}],
+        },
+    )
+
+    assert aggr.poll_once(timeout_ms=200)
+    assert set(aggr.state_cache) == {"zmq/node", "ros/node"}
+    assert sink.messages[-1].node == "ros/node"
+
+    pub.close(linger=0)
+    aggr.close()
+
+
+def test_latest_source_message_wins_for_name_collision() -> None:
+    endpoint = _free_tcp_endpoint()
+    source_a = FakeSource([[_message("shared", level=0, msg="old")]])
+    source_b = FakeSource([[_message("shared", level=2, msg="new")]])
+    aggr = DiagnosticsAggregator(_config(endpoint), [], sources=[source_a, source_b], time_fn=FakeClock())
+
+    assert aggr.poll_once(timeout_ms=0)
+    assert aggr.state_cache["shared"].level == 2
+    assert aggr.state_cache["shared"].msg == "new"
+    aggr.close()
+
+
 def test_stale_then_recovered() -> None:
     endpoint = _free_tcp_endpoint()
     ctx = zmq.Context()
@@ -121,6 +198,21 @@ def test_stale_then_recovered() -> None:
     assert aggr.process_raw(message)
     assert aggr.state_cache["controller/b"].level == 0
 
+    aggr.close()
+
+
+def test_ros_origin_message_uses_receive_time_for_stale_detection() -> None:
+    endpoint = _free_tcp_endpoint()
+    clock = FakeClock()
+    source = FakeSource([[_message("ros/stale", msg="from ros")], []])
+    aggr = DiagnosticsAggregator(_config(endpoint), [], sources=[source], time_fn=clock)
+
+    assert aggr.poll_once(timeout_ms=0)
+    clock.advance(2.0)
+    aggr.poll_once(timeout_ms=0)
+
+    assert aggr.state_cache["ros/stale"].level == 3
+    assert aggr.state_cache["ros/stale"].msg == "STALE"
     aggr.close()
 
 
@@ -190,9 +282,14 @@ def test_multi_node_different_rates() -> None:
     aggr.close()
 
 
-def test_graceful_shutdown_cleans_zmq() -> None:
+def test_graceful_shutdown_closes_sources() -> None:
     endpoint = _free_tcp_endpoint()
     ctx = zmq.Context()
-    aggr = DiagnosticsAggregator(_config(endpoint), [], context=ctx, time_fn=FakeClock())
+    zmq_source = ZmqDiagnosticsSource(endpoint, context=ctx)
+    fake_source = FakeSource([])
+    aggr = DiagnosticsAggregator(
+        _config(endpoint), [], sources=[zmq_source, fake_source], time_fn=FakeClock()
+    )
     aggr.close()
-    assert aggr._socket.closed
+    assert zmq_source._socket.closed
+    assert fake_source.closed

@@ -13,7 +13,7 @@ A Python aggregator is available under `/aggregator`.
 - JSON schema validation for incoming diagnostics messages
 - Pluggable sinks:
   - InfluxDB v2 export (optional)
-  - ROS `/diagnostics` publisher (optional)
+  - ROS `/diagnostics` subscriber and `/diagnostics_agg` publisher (optional)
   - JSONL file logger (optional, rolling)
   - Stdout pretty printer (optional)
 
@@ -52,7 +52,10 @@ sinks:
 
   ros_diagnostics:
     enabled: false
-    publish_rate_hz: 1.0
+    input_topic: "/diagnostics"
+    aggregated_topic: "/diagnostics_agg"
+    publish_aggregated: true
+    aggregation_root: "Robot"
 
   json_file:
     enabled: false
@@ -66,5 +69,41 @@ sinks:
 
 ### Run
 ```bash
-python -m aggregator.aggregator_node --config /path/to/config.yaml
+python -m pyxbot2_diagnostics.aggregator.aggregator_node --config /path/to/config.yaml
 ```
+
+
+## Local Grafana and InfluxDB
+
+A local Docker Compose stack is provided for visualizing aggregated ROS diagnostics with Grafana.
+Docker runs only InfluxDB and Grafana; ROS nodes run on the host so they can join the ROS graph normally.
+The host ROS environment must provide the `diagnostic_remote_logging` package.
+
+1. Create a local environment file:
+
+```bash
+cp docker/.env.example docker/.env
+```
+
+2. Start InfluxDB and Grafana:
+
+```bash
+docker compose --env-file docker/.env -f docker/docker-compose.diagnostics.yml up -d
+```
+
+3. Start the diagnostics aggregator, which subscribes to `/diagnostics` and publishes `/diagnostics_agg`:
+
+```bash
+ros2 launch launch/xbot2_diagnostics_aggregator.launch.py
+```
+
+4. Start `diagnostic_remote_logging`, remapped so it writes `/diagnostics_agg` to InfluxDB:
+
+```bash
+source docker/.env
+ros2 launch launch/diagnostic_remote_logging.launch.py
+```
+
+Grafana is available at `http://localhost:3000` and InfluxDB at `http://localhost:8086`.
+The default development credentials are documented in `docker/.env.example`; use local secrets for anything beyond development.
+

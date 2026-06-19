@@ -32,6 +32,10 @@ class InfluxDBSection:
 @dataclass(slots=True)
 class RosDiagnosticsSection:
     enabled: bool = False
+    input_topic: str = "/diagnostics"
+    aggregated_topic: str = "/diagnostics_agg"
+    publish_aggregated: bool = True
+    aggregation_root: str = "Robot"
 
 
 @dataclass(slots=True)
@@ -98,6 +102,10 @@ def load_config(path: str | None = None) -> AggregatorConfig:
 
     agg = _section(raw, "aggregator")
     sinks = _section(raw, "sinks")
+    influxdb = _section(sinks, "influxdb")
+    ros_diagnostics = _section(sinks, "ros_diagnostics")
+    json_file = _section(sinks, "json_file")
+    stdout = _section(sinks, "stdout")
 
     cfg = AggregatorConfig(
         aggregator=AggregatorSection(
@@ -107,23 +115,27 @@ def load_config(path: str | None = None) -> AggregatorConfig:
         ),
         sinks=SinksSection(
             influxdb=InfluxDBSection(
-                enabled=_as_bool(_section(sinks, "influxdb").get("enabled"), False),
-                url=str(_section(sinks, "influxdb").get("url", "")),
-                token=str(_section(sinks, "influxdb").get("token", "")),
-                org=str(_section(sinks, "influxdb").get("org", "")),
-                bucket=str(_section(sinks, "influxdb").get("bucket", "")),
+                enabled=_as_bool(influxdb.get("enabled"), False),
+                url=str(influxdb.get("url", "")),
+                token=str(influxdb.get("token", "")),
+                org=str(influxdb.get("org", "")),
+                bucket=str(influxdb.get("bucket", "")),
             ),
             ros_diagnostics=RosDiagnosticsSection(
-                enabled=_as_bool(_section(sinks, "ros_diagnostics").get("enabled"), False),
+                enabled=_as_bool(ros_diagnostics.get("enabled"), False),
+                input_topic=str(ros_diagnostics.get("input_topic", "/diagnostics")),
+                aggregated_topic=str(ros_diagnostics.get("aggregated_topic", "/diagnostics_agg")),
+                publish_aggregated=_as_bool(ros_diagnostics.get("publish_aggregated"), True),
+                aggregation_root=str(ros_diagnostics.get("aggregation_root", "Robot")),
             ),
             json_file=JsonFileSection(
-                enabled=_as_bool(_section(sinks, "json_file").get("enabled"), False),
-                path=str(_section(sinks, "json_file").get("path", "/tmp/diagnostics.jsonl")),
-                max_file_size_mb=float(_section(sinks, "json_file").get("max_file_size_mb", 100.0)),
+                enabled=_as_bool(json_file.get("enabled"), False),
+                path=str(json_file.get("path", "/tmp/diagnostics.jsonl")),
+                max_file_size_mb=float(json_file.get("max_file_size_mb", 100.0)),
             ),
             stdout=StdoutSection(
-                enabled=_as_bool(_section(sinks, "stdout").get("enabled"), False),
-                interval_sec=float(_section(sinks, "stdout").get("interval_sec", 10.0)),
+                enabled=_as_bool(stdout.get("enabled"), False),
+                interval_sec=float(stdout.get("interval_sec", 10.0)),
             ),
         ),
     )
@@ -136,5 +148,12 @@ def load_config(path: str | None = None) -> AggregatorConfig:
         raise ValueError("sinks.stdout.interval_sec must be > 0")
     if cfg.sinks.json_file.max_file_size_mb <= 0:
         raise ValueError("sinks.json_file.max_file_size_mb must be > 0")
+    if cfg.sinks.ros_diagnostics.enabled:
+        if not cfg.sinks.ros_diagnostics.input_topic:
+            raise ValueError("sinks.ros_diagnostics.input_topic must be non-empty")
+        if cfg.sinks.ros_diagnostics.publish_aggregated and not cfg.sinks.ros_diagnostics.aggregated_topic:
+            raise ValueError("sinks.ros_diagnostics.aggregated_topic must be non-empty")
+        if not cfg.sinks.ros_diagnostics.aggregation_root.strip("/"):
+            raise ValueError("sinks.ros_diagnostics.aggregation_root must be non-empty")
 
     return cfg

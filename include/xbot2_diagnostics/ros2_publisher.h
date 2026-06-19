@@ -1,63 +1,48 @@
-// diag/diag_publisher.hpp
 #pragma once
 
 #include <algorithm>
 #include <charconv>
 #include <chrono>
-#include <cstdio>
-#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
-#include <zmq.hpp>
+#include <diagnostic_msgs/msg/diagnostic_array.hpp>
+#include <diagnostic_msgs/msg/diagnostic_status.hpp>
+#include <diagnostic_msgs/msg/key_value.hpp>
+#include <rclcpp/rclcpp.hpp>
 
 #include "diagnostics.h"
 #include "stats_accumulator.h"
 
 namespace XBot::diagnostics {
 
-class DiagPublisher {
+class Ros2DiagPublisher
+{
 public:
-    DiagPublisher(std::string node_name,
-                  std::string hw_id,
-                  std::string endpoint = "",
-                  std::shared_ptr<zmq::context_t> ctx = nullptr,
-                  double throttle_publish_interval_sec = 0.0)
-        : DiagPublisher(std::move(node_name),
-                        std::move(hw_id),
-                        {},
-                        std::move(endpoint),
-                        std::move(ctx),
-                        throttle_publish_interval_sec)
-    {}
+    using DiagnosticArrayMsg = diagnostic_msgs::msg::DiagnosticArray;
+    using DiagnosticStatusMsg = diagnostic_msgs::msg::DiagnosticStatus;
+    using KeyValueMsg = diagnostic_msgs::msg::KeyValue;
 
-    DiagPublisher(std::string node_name,
-                  std::string hw_id,
-                  std::vector<std::string> value_keys,
-                  std::string endpoint = "",
-                  std::shared_ptr<zmq::context_t> ctx = nullptr,
-                  double throttle_publish_interval_sec = 0.0)
-        : ctx_(make_context(std::move(ctx))),
-          socket_(*ctx_, zmq::socket_type::push),
-          node_(std::move(node_name)),
+    Ros2DiagPublisher(rclcpp::Node& node,
+                      std::string status_name,
+                      std::string hw_id,
+                      std::vector<std::string> value_keys = {},
+                      std::string topic = "/diagnostics",
+                      rclcpp::QoS qos = rclcpp::SystemDefaultsQoS(),
+                      double throttle_publish_interval_sec = 0.0)
+        : publisher_(node.create_publisher<DiagnosticArrayMsg>(std::move(topic), qos)),
+          clock_(node.get_clock()),
+          status_name_(std::move(status_name)),
           hw_id_(std::move(hw_id)),
           value_keys_(std::move(value_keys)),
           throttle_publish_interval_sec_(throttle_publish_interval_sec),
-          _last_publish_time(std::chrono::steady_clock::now())
-    {
-        if (endpoint.empty())
-        {
-            std::getenv("XBOT_DIAG_ENDPOINT") ?
-                endpoint = std::getenv("XBOT_DIAG_ENDPOINT") :
-                endpoint = "tcp://localhost:9268";
-        }
-
-        socket_.connect(endpoint);
-    }
+          last_publish_time_(std::chrono::steady_clock::now())
+    {}
 
     bool should_publish() const
     {
@@ -65,11 +50,10 @@ public:
             return true;
         }
 
-        auto now = std::chrono::steady_clock::now();
-        return (now - _last_publish_time) >= throttle_publish_interval_sec_;
+        const auto now = std::chrono::steady_clock::now();
+        return (now - last_publish_time_) >= throttle_publish_interval_sec_;
     }
 
-    // Call from diagnostics timer (1-10 Hz)
     void publish(int level, const std::string& msg,
                  const std::vector<KeyValue>& values = {})
     {
@@ -79,7 +63,7 @@ public:
 
         DiagnosticsStatus status;
         status.level = static_cast<DiagnosticsStatus::Level>(level);
-        status.name = node_;
+        status.name = status_name_;
         status.hardware_id = hw_id_;
         status.msg = msg;
         status.values = values;
@@ -95,7 +79,7 @@ public:
 
         DiagnosticsStatus status;
         status.level = static_cast<DiagnosticsStatus::Level>(level);
-        status.name = node_;
+        status.name = status_name_;
         status.hardware_id = hw_id_;
         status.msg = msg;
         fill_keyed_values(values, status.values);
@@ -111,7 +95,6 @@ public:
         publish(status, std::chrono::steady_clock::now());
     }
 
-    // Convenience: flush a StatAccumulator and publish its stats.
     void publish_stats(const std::string& metric_name,
                        StatAccumulator& acc,
                        int level = DiagnosticsStatus::OK,
@@ -120,9 +103,10 @@ public:
         if (!should_publish()) {
             return;
         }
-        
+
         auto time_ns = std::chrono::steady_clock::now().time_since_epoch().count();
         auto st = acc.flush(time_ns);
+
         publish(level, msg, {
             {metric_name + ".count", static_cast<double>(st.count)},
             {metric_name + ".mean",  st.mean},
@@ -138,18 +122,6 @@ public:
     }
 
 private:
-    static std::shared_ptr<zmq::context_t> make_context(std::shared_ptr<zmq::context_t> ctx)
-    {
-        return ctx ? std::move(ctx) : std::make_shared<zmq::context_t>(1);
-    }
-
-    static double timestamp_now() {
-        using namespace std::chrono;
-        auto now = system_clock::now();
-        auto epoch = now.time_since_epoch();
-        return duration_cast<duration<double>>(epoch).count();
-    }
-
     void fill_keyed_values(const std::vector<double>& values, std::vector<KeyValue>& keyed_values) const
     {
         keyed_values.clear();
@@ -161,64 +133,53 @@ private:
 
     void publish(const DiagnosticsStatus& status, std::chrono::steady_clock::time_point now)
     {
-        _buf.clear();
-        _buf += R"({"v":1,"node":")"; _append_escaped(_buf, status.name);
-        _buf += R"(","hw_id":")";     _append_escaped(_buf, status.hardware_id);
-        _buf += R"(","stamp":)";      _append_double(_buf, timestamp_now());
-        _buf += R"(,"level":)";       _buf += std::to_string(static_cast<int>(status.level));
-        _buf += R"(,"msg":")";        _append_escaped(_buf, status.msg);
-        _buf += R"(","values":[)";
-        for (std::size_t i = 0; i < status.values.size(); ++i) {
-            if (i) _buf += ',';
-            _buf += "[\"";
-            _append_escaped(_buf, status.values[i].key);
-            _buf += "\",";
-            _append_double(_buf, status.values[i].value);
-            _buf += ']';
-        }
-        _buf += "]}";
-
-        socket_.send(zmq::buffer(_buf), zmq::send_flags::dontwait);
-        _last_publish_time = now;
+        DiagnosticArrayMsg array_msg;
+        array_msg.header.stamp = clock_->now();
+        array_msg.status.push_back(to_ros_status(status));
+        publisher_->publish(array_msg);
+        last_publish_time_ = now;
     }
 
-    static void _append_double(std::string& out, double v) {
+    static DiagnosticStatusMsg to_ros_status(const DiagnosticsStatus& status)
+    {
+        DiagnosticStatusMsg ros_status;
+        ros_status.level = static_cast<unsigned char>(status.level);
+        ros_status.name = status.name;
+        ros_status.message = status.msg;
+        ros_status.hardware_id = status.hardware_id;
+        ros_status.values.reserve(status.values.size());
+        for (const auto& kv : status.values) {
+            KeyValueMsg ros_kv;
+            ros_kv.key = kv.key;
+            ros_kv.value = double_to_string(kv.value);
+            ros_status.values.push_back(std::move(ros_kv));
+        }
+        return ros_status;
+    }
+
+    static std::string double_to_string(double value)
+    {
         char tmp[32];
-        auto [ptr, ec] = std::to_chars(tmp, tmp + sizeof(tmp), v);
-        (void)ec;
-        out.append(tmp, ptr);
-    }
-
-    static void _append_escaped(std::string& out, const std::string& s) {
-        for (unsigned char c : s) {
-            switch (c) {
-                case '"':  out += "\\\""; break;
-                case '\\': out += "\\\\"; break;
-                case '\n': out += "\\n";  break;
-                case '\r': out += "\\r";  break;
-                case '\t': out += "\\t";  break;
-                default:
-                    if (c < 0x20) {
-                        char buf[8];
-                        std::snprintf(buf, sizeof(buf), "\\u%04x", c);
-                        out += buf;
-                    } else {
-                        out += static_cast<char>(c);
-                    }
-            }
+        auto [ptr, ec] = std::to_chars(tmp, tmp + sizeof(tmp), value);
+        if (ec == std::errc()) {
+            return std::string(tmp, ptr);
         }
+
+        std::ostringstream os;
+        os << value;
+        return os.str();
     }
 
-    std::shared_ptr<zmq::context_t> ctx_;
-    zmq::socket_t socket_;
-    std::string node_, hw_id_;
+    rclcpp::Publisher<DiagnosticArrayMsg>::SharedPtr publisher_;
+    rclcpp::Clock::SharedPtr clock_;
+    std::string status_name_;
+    std::string hw_id_;
     std::vector<std::string> value_keys_;
-    std::string _buf;  // reused scratch buffer
     std::chrono::duration<double> throttle_publish_interval_sec_;
-    std::chrono::steady_clock::time_point _last_publish_time;
+    std::chrono::steady_clock::time_point last_publish_time_;
 };
 
-class StatsPublisher
+class Ros2StatsPublisher
 {
 public:
     struct Thresholds {
@@ -232,43 +193,45 @@ public:
         int count_max = std::numeric_limits<int>::max();
     };
 
-    StatsPublisher(std::string node_name,
-                   std::string hw_id,
-                   std::string stats_name,
-                   double publish_interval_sec,
-                   std::size_t perc_capacity = 0,
-                   std::string endpoint = "",
-                   std::shared_ptr<zmq::context_t> ctx = nullptr)
-        : _acc(perc_capacity),
-          _diag_pub(std::make_unique<DiagPublisher>(
-              std::move(node_name),
+    Ros2StatsPublisher(rclcpp::Node& node,
+                       std::string status_name,
+                       std::string hw_id,
+                       std::string stats_name,
+                       double publish_interval_sec,
+                       std::size_t perc_capacity = 0,
+                       std::string topic = "/diagnostics",
+                       rclcpp::QoS qos = rclcpp::SystemDefaultsQoS())
+        : acc_(perc_capacity),
+          diag_pub_(std::make_unique<Ros2DiagPublisher>(
+              node,
+              std::move(status_name),
               std::move(hw_id),
-              prefixed_value_keys(stats_name, _acc.value_keys),
-              std::move(endpoint),
-              std::move(ctx),
+              prefixed_value_keys(stats_name, acc_.value_keys),
+              std::move(topic),
+              qos,
               publish_interval_sec)),
-          _stats_name(std::move(stats_name))
+          stats_name_(std::move(stats_name))
     {
-        _values.reserve(_acc.value_keys.size());
-        _msg.reserve(128);
+        values_.reserve(acc_.value_keys.size());
+        msg_.reserve(128);
     }
 
     void update_and_publish(double value)
     {
-        _acc.update(value);
+        acc_.update(value);
 
-        if (_diag_pub->should_publish())
-        {
-            auto stats = _acc.flush();
-            stats.to_std_vector(_values);
+        if (diag_pub_->should_publish()) {
+            auto time_ns = std::chrono::steady_clock::now().time_since_epoch().count();
+            auto stats = acc_.flush(time_ns);
+            stats.to_std_vector(values_);
 
-            auto level = msg_from_stats(stats, _msg);
-            _diag_pub->publish(level, _msg, _values);
+            auto level = msg_from_stats(stats, msg_);
+            diag_pub_->publish(level, msg_, values_);
         }
     }
 
-    Thresholds& warning_thresholds() { return _warning_thresholds; }
-    Thresholds& error_thresholds() { return _error_thresholds; }
+    Thresholds& warning_thresholds() { return warning_thresholds_; }
+    Thresholds& error_thresholds() { return error_thresholds_; }
 
 private:
     static std::vector<std::string> prefixed_value_keys(
@@ -301,7 +264,7 @@ private:
                     bool error) const
     {
         msg.clear();
-        msg += _stats_name;
+        msg += stats_name_;
         msg += " ";
         msg += stat_name;
         if (error) {
@@ -354,31 +317,31 @@ private:
             return DiagnosticsStatus::OK;
         };
 
-        auto level = check_thresholds(_error_thresholds, true);
+        auto level = check_thresholds(error_thresholds_, true);
         if (level != DiagnosticsStatus::OK) {
             return level;
         }
 
-        level = check_thresholds(_warning_thresholds, false);
+        level = check_thresholds(warning_thresholds_, false);
         if (level != DiagnosticsStatus::OK) {
             return level;
         }
 
         msg.clear();
-        msg += _stats_name;
+        msg += stats_name_;
         msg += " OK (n = ";
         msg += value_to_string(stats.count);
         msg += ")";
         return DiagnosticsStatus::OK;
     }
 
-    StatAccumulator _acc;
-    std::unique_ptr<DiagPublisher> _diag_pub;
-    std::vector<double> _values;
-    std::string _msg;
-    std::string _stats_name;
-    Thresholds _warning_thresholds;
-    Thresholds _error_thresholds;
+    StatAccumulator acc_;
+    std::unique_ptr<Ros2DiagPublisher> diag_pub_;
+    std::vector<double> values_;
+    std::string msg_;
+    std::string stats_name_;
+    Thresholds warning_thresholds_;
+    Thresholds error_thresholds_;
 };
 
 } // namespace XBot::diagnostics

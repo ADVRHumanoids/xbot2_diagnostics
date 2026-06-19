@@ -9,6 +9,7 @@ include(cmake/ExportProject.cmake)
 
 #
 find_package(cppzmq REQUIRED)
+find_package(diagnostic_msgs QUIET)
 
 # ── header-only interface library ──────────────────────────────────────────
 add_library(xbot2_diagnostics INTERFACE)
@@ -24,12 +25,35 @@ install(TARGETS xbot2_diagnostics
     DESTINATION lib
 )
 
+
+# ros library
+if(${diagnostic_msgs_FOUND})
+    message(STATUS "diagnostic_msgs found, building ROS2 publisher")
+    add_library(xbot2_diagnostics_ros INTERFACE)
+    target_include_directories(xbot2_diagnostics_ros INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    )
+    target_link_libraries(xbot2_diagnostics_ros INTERFACE
+        diagnostic_msgs::diagnostic_msgs__rosidl_typesupport_cpp
+    )
+    install(TARGETS xbot2_diagnostics_ros
+        EXPORT ${PROJECT_NAME}Targets
+        DESTINATION lib
+    )
+endif()
+
 # export 
 export_project()
 
 # install
 install(
     DIRECTORY include/ DESTINATION include
+)
+
+install(
+    DIRECTORY config launch
+    DESTINATION share/${PROJECT_NAME}
 )
 
 # python package

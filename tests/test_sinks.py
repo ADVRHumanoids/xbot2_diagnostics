@@ -25,14 +25,20 @@ class FakeWriteApi:
         self.calls.append({"bucket": bucket, "org": org, "record": record})
 
 
-def _msg(node: str = "n1") -> DiagnosticsMessage:
+def _level_value(level):
+    if isinstance(level, bytes):
+        return level[0]
+    return level
+
+
+def _msg(node: str = "n1", *, level: int = 0, msg: str = "OK") -> DiagnosticsMessage:
     return DiagnosticsMessage(
         v=1,
         node=node,
         hw_id="hw",
         stamp=1.23,
-        level=0,
-        msg="OK",
+        level=level,
+        msg=msg,
         values=(
             DiagnosticKeyValue("torque_error.mean", 0.1),
             DiagnosticKeyValue("torque_error.max", 0.3),
@@ -60,28 +66,74 @@ def test_influxdb_sink_writes_points() -> None:
     assert records[0]["tags"]["stat"] in {"mean", "max"}
 
 
-def test_ros_sink_mapping_and_publish_rate() -> None:
-    clock = FakeClock(10.0)
-    published = []
-
+def test_ros_sink_publishes_aggregated_output() -> None:
+    aggregated_published = []
     sink = RosDiagnosticsSink(
-        publisher=published.append,
-        time_fn=clock,
+        aggregated_publisher=aggregated_published.append,
+        time_fn=FakeClock(10.0),
     )
 
-    sink.publish_state({"n1": _msg("n1")})
-    sink.publish_state({"n1": _msg("n1")})
-    assert len(published) == 2
+    sink.publish_state(
+        {
+            "/xbot/thread/rt_main/load": _msg("/xbot/thread/rt_main/load"),
+            "/xbot/thread/nrt_main/load": _msg("/xbot/thread/nrt_main/load", level=1, msg="WARN"),
+        }
+    )
 
-    clock.advance(1.1)
-    sink.publish_state({"n1": _msg("n1")})
-    assert len(published) == 3
+    statuses = {status.name: status for status in aggregated_published[0].status}
+    assert list(statuses) == sorted(statuses)
+    assert set(statuses) == {
+        "/Robot",
+        "/Robot/xbot",
+        "/Robot/xbot/thread",
+        "/Robot/xbot/thread/nrt_main",
+        "/Robot/xbot/thread/nrt_main/load",
+        "/Robot/xbot/thread/rt_main",
+        "/Robot/xbot/thread/rt_main/load",
+    }
+    assert _level_value(statuses["/Robot"].level) == 1
+    assert statuses["/Robot"].message == "WARN"
+    assert _level_value(statuses["/Robot/xbot/thread"].level) == 1
+    assert statuses["/Robot/xbot/thread/nrt_main/load"].message == "WARN"
+    assert statuses["/Robot/xbot/thread/nrt_main/load"].hardware_id == "hw"
+    assert statuses["/Robot/xbot/thread/nrt_main/load"].values[0].key == "torque_error.mean"
 
-    status = published[0].status[0]
-    assert status.name == "n1"
-    assert status.hardware_id == "hw"
-    assert status.level == RosDiagnosticsSink._to_level(0)
-    assert status.values[0].key == "torque_error.mean"
+
+def test_ros_sink_does_not_duplicate_robot_root_and_preserves_raw_segments() -> None:
+    aggregated_published = []
+    sink = RosDiagnosticsSink(
+        aggregated_publisher=aggregated_published.append,
+        time_fn=FakeClock(10.0),
+    )
+
+    sink.publish_state({"/Robot/xbot/thread/rt_main": _msg("/Robot/xbot/thread/rt_main")})
+
+    names = [status.name for status in aggregated_published[0].status]
+    assert "/Robot/Robot/xbot/thread/rt_main" not in names
+    assert "/Robot/xbot/thread/rt_main" in names
+    assert "/Robot/xbot/thread/rt_main".split("/")[-1] == "rt_main"
+
+
+def test_ros_sink_group_levels_use_worst_descendant() -> None:
+    aggregated_published = []
+    sink = RosDiagnosticsSink(
+        aggregated_publisher=aggregated_published.append,
+        time_fn=FakeClock(10.0),
+    )
+
+    sink.publish_state(
+        {
+            "/xbot/a": _msg("/xbot/a", level=0),
+            "/xbot/b": _msg("/xbot/b", level=2, msg="ERROR"),
+            "/other/c": _msg("/other/c", level=3, msg="STALE"),
+        }
+    )
+
+    statuses = {status.name: status for status in aggregated_published[0].status}
+    assert _level_value(statuses["/Robot/xbot"].level) == 2
+    assert statuses["/Robot/xbot"].message == "ERROR"
+    assert _level_value(statuses["/Robot"].level) == 3
+    assert statuses["/Robot"].message == "STALE"
 
 
 def test_json_file_sink_appends_jsonl(tmp_path) -> None:

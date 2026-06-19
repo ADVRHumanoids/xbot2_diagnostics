@@ -4,6 +4,7 @@ include(CMakeFindDependencyMacro)
 
 find_dependency(cppzmq)
 find_dependency(nlohmann_json)
+find_dependency(diagnostic_msgs)
 
 set(export_config_name "@PROJECT_NAME@")
 set_and_check(${export_config_name}_TARGETS

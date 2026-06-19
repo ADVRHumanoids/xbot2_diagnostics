@@ -44,6 +44,14 @@ class DiagnosticsMessage:
     values: tuple[DiagnosticKeyValue, ...]
 
 
+class Source(Protocol):
+    def poll(self, timeout_ms: int = 100) -> list[DiagnosticsMessage]:
+        ...
+
+    def close(self) -> None:
+        ...
+
+
 class Sink(Protocol):
     def handle_message(self, message: DiagnosticsMessage) -> None:
         ...
@@ -55,25 +63,56 @@ class Sink(Protocol):
         ...
 
 
+class ZmqDiagnosticsSource:
+    """ZMQ PULL source for JSON diagnostics messages."""
+
+    def __init__(
+        self,
+        endpoint: str,
+        *,
+        context: zmq.Context | None = None,
+    ) -> None:
+        self._ctx = context or zmq.Context.instance()
+        self._owns_ctx = context is None
+        self._socket = self._ctx.socket(zmq.PULL)
+        self._socket.bind(endpoint)
+
+    def poll(self, timeout_ms: int = 100) -> list[DiagnosticsMessage]:
+        if not self._socket.poll(timeout=timeout_ms, flags=zmq.POLLIN):
+            return []
+
+        data = self._socket.recv()
+        try:
+            payload = json.loads(data.decode("utf-8"))
+            return [DiagnosticsAggregator.validate_and_normalize_message(payload)]
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            LOGGER.warning("Rejecting malformed ZMQ diagnostics message: %s", exc)
+            return []
+
+    def close(self) -> None:
+        self._socket.close(linger=0)
+        if self._owns_ctx:
+            self._ctx.term()
+
+
 class DiagnosticsAggregator:
-    """Single-threaded ZMQ PULL diagnostics fan-in aggregator."""
+    """Single-threaded diagnostics fan-in aggregator."""
 
     def __init__(
         self,
         config: AggregatorConfig,
         sinks: list[Sink] | None = None,
         *,
+        sources: list[Source] | None = None,
         context: zmq.Context | None = None,
         time_fn: Callable[[], float] = time.time,
     ) -> None:
         self._config = config
         self._sinks = sinks or []
         self._time_fn = time_fn
-        self._ctx = context or zmq.Context.instance()
-        self._owns_ctx = context is None
-
-        self._socket = self._ctx.socket(zmq.PULL)
-        self._socket.bind(config.aggregator.zmq_endpoint)
+        self._sources = sources or [
+            ZmqDiagnosticsSource(config.aggregator.zmq_endpoint, context=context)
+        ]
 
         self.state_cache: dict[str, DiagnosticsMessage] = {}
         self._last_seen: dict[str, float] = {}
@@ -144,14 +183,8 @@ class DiagnosticsAggregator:
         for sink in self._sinks:
             sink.publish_state(snapshot)
 
-    def process_raw(self, raw_payload: Any, now: float | None = None) -> bool:
-        """Process one raw JSON payload. Returns True if accepted."""
-        try:
-            message = self.validate_and_normalize_message(raw_payload)
-        except ValueError as exc:
-            LOGGER.warning("Rejecting malformed diagnostics message: %s", exc)
-            return False
-
+    def process_message(self, message: DiagnosticsMessage, now: float | None = None) -> bool:
+        """Process one normalized diagnostics message."""
         recv_time = now if now is not None else self._time_fn()
         self.state_cache[message.node] = message
         self._last_seen[message.node] = recv_time
@@ -160,17 +193,24 @@ class DiagnosticsAggregator:
         self._publish_state()
         return True
 
+    def process_raw(self, raw_payload: Any, now: float | None = None) -> bool:
+        """Process one raw JSON payload. Returns True if accepted."""
+        try:
+            message = self.validate_and_normalize_message(raw_payload)
+        except ValueError as exc:
+            LOGGER.warning("Rejecting malformed diagnostics message: %s", exc)
+            return False
+
+        return self.process_message(message, now=now)
+
     def poll_once(self, timeout_ms: int = 100) -> bool:
-        """Process at most one incoming message and run stale checks."""
+        """Poll all sources once and run stale checks."""
         processed = False
-        if self._socket.poll(timeout=timeout_ms, flags=zmq.POLLIN):
-            data = self._socket.recv()
-            try:
-                payload = json.loads(data.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                LOGGER.warning("Rejecting non-JSON diagnostics message: %s", exc)
-            else:
-                processed = self.process_raw(payload)
+        for index, source in enumerate(self._sources):
+            source_timeout_ms = timeout_ms if index == 0 else 0
+            for message in source.poll(timeout_ms=source_timeout_ms):
+                self.process_message(message)
+                processed = True
 
         now = self._time_fn()
         if (now - self._last_stale_check) >= self._config.aggregator.stale_check_interval_sec:
@@ -203,6 +243,5 @@ class DiagnosticsAggregator:
     def close(self) -> None:
         for sink in self._sinks:
             sink.close()
-        self._socket.close(linger=0)
-        if self._owns_ctx:
-            self._ctx.term()
+        for source in self._sources:
+            source.close()
