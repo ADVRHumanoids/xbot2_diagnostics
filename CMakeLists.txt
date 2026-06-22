@@ -71,7 +71,7 @@ if(BUILD_TESTING)
     )
     target_link_libraries(test_stats_accumulator PRIVATE
         xbot2_diagnostics
-    nlohmann_json::nlohmann_json
+        nlohmann_json::nlohmann_json
         GTest::GTest
         GTest::Main
     )

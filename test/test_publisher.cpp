@@ -104,8 +104,8 @@ TEST(StatsPublisher, PublishesThresholdGeneratedMessage)
     EXPECT_EQ(j["level"], DiagnosticsStatus::WARNING);
     EXPECT_EQ(j["msg"], "latency avg high: 2 >= 1 (n = 1)");
     ASSERT_GE(j["values"].size(), 6);
-    EXPECT_EQ(j["values"][0][0], "latency.count");
-    EXPECT_DOUBLE_EQ(j["values"][0][1], 1.0);
-    EXPECT_EQ(j["values"][3][0], "latency.rms");
-    EXPECT_DOUBLE_EQ(j["values"][3][1], 2.0);
+    EXPECT_EQ(j["values"][1][0], "latency.count");
+    EXPECT_DOUBLE_EQ(j["values"][1][1], 1.0);
+    EXPECT_EQ(j["values"][4][0], "latency.rms");
+    EXPECT_DOUBLE_EQ(j["values"][4][1], 2.0);
 }
