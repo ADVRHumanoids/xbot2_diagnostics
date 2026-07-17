@@ -13,12 +13,12 @@ try:
     from diagnostic_msgs.msg import DiagnosticStatus as RosDiagnosticStatus
     from diagnostic_msgs.msg import KeyValue as RosKeyValue
 except ImportError:  # pragma: no cover - exercised with fallback types in tests
-    @dataclass(slots=True)
+    @dataclass
     class RosKeyValue:
         key: str = ""
         value: str = ""
 
-    @dataclass(slots=True)
+    @dataclass
     class RosDiagnosticStatus:
         level: int = 0
         name: str = ""
@@ -26,11 +26,11 @@ except ImportError:  # pragma: no cover - exercised with fallback types in tests
         hardware_id: str = ""
         values: list[RosKeyValue] = field(default_factory=list)
 
-    @dataclass(slots=True)
+    @dataclass
     class _Header:
         stamp: float = 0.0
 
-    @dataclass(slots=True)
+    @dataclass
     class RosDiagnosticArray:
         header: _Header = field(default_factory=_Header)
         status: list[RosDiagnosticStatus] = field(default_factory=list)

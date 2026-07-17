@@ -1,5 +1,9 @@
 from pathlib import Path
-import tomllib
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.8-3.10
+    import tomli as tomllib
 
 import pytest
 import yaml
@@ -51,6 +55,7 @@ def test_host_monitor_assets() -> None:
     assert "NoNewPrivileges=yes" in service
 
     pyproject = tomllib.loads((ROOT / "python/pyproject.toml").read_text(encoding="utf-8"))
+    assert pyproject["project"]["requires-python"] == ">=3.8"
     assert "psutil>=5.9" in pyproject["project"]["dependencies"]
     assert pyproject["project"]["scripts"]["xbot2-host-monitor"].endswith(":main")
 

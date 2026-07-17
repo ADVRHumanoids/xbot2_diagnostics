@@ -27,13 +27,13 @@ def _load_message_schema() -> dict[str, Any]:
 MESSAGE_SCHEMA = _load_message_schema()
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class DiagnosticKeyValue:
     key: str
     value: Any
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class DiagnosticsMessage:
     v: int
     node: str

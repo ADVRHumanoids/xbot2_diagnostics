@@ -13,7 +13,7 @@ import yaml
 CONFIG_ENV_VAR = "XBOT2_HOST_MONITOR_CONFIG"
 
 
-@dataclass(slots=True)
+@dataclass
 class ThresholdConfig:
     consecutive_samples: int = 3
     recovery_margin: float = 5.0
@@ -31,7 +31,7 @@ class ThresholdConfig:
     battery_error_percent: float = 10.0
 
 
-@dataclass(slots=True)
+@dataclass
 class CollectorConfig:
     system: bool = True
     cpu: bool = True
@@ -45,7 +45,7 @@ class CollectorConfig:
     xenomai: bool = True
 
 
-@dataclass(slots=True)
+@dataclass
 class HostMonitorConfig:
     zmq_endpoint: str = ""
     sample_interval_sec: float = 1.0

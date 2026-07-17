@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class AlertObservation:
     key: str
     label: str
@@ -16,7 +16,7 @@ class AlertObservation:
     unit: str = ""
 
 
-@dataclass(slots=True)
+@dataclass
 class _AlertState:
     level: int = 0
     candidate: int = 0

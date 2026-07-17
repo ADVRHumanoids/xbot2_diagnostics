@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 
 from pyxbot2_diagnostics.aggregator.sources.ros_diagnostics_source import RosDiagnosticsSource

@@ -7,7 +7,7 @@ name = "pyxbot2_diagnostics"
 version = "0.1.0"
 description = "Diagnostics client for XBot2"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.8"
 license = { text = "LGPL-3.0-or-later" }
 authors = [
     { name = "IIT" },
@@ -27,6 +27,7 @@ xbot2-host-monitor = "pyxbot2_diagnostics.host_monitor.monitor:main"
 dev = [
     "pytest>=7",
     "pytest-cov",
+    "tomli>=1.1; python_version < '3.11'",
 ]
 
 [project.urls]

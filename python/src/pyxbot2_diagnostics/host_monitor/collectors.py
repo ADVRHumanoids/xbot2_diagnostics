@@ -17,7 +17,7 @@ from .config import HostMonitorConfig
 from .health import AlertObservation
 
 
-@dataclass(slots=True)
+@dataclass
 class MetricSample:
     path: str
     values: dict[str, float]
@@ -25,7 +25,7 @@ class MetricSample:
     summary: str = ""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class XenomaiSchedEntry:
     cpu: int
     pid: int

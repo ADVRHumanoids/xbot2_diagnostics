@@ -13,14 +13,14 @@ import yaml
 CONFIG_ENV_VAR = "XBOT2_DIAGNOSTICS_CONFIG"
 
 
-@dataclass(slots=True)
+@dataclass
 class AggregatorSection:
     zmq_endpoint: str = "tcp://localhost:9268"
     stale_timeout_sec: float = 5.0
     stale_check_interval_sec: float = 1.0
 
 
-@dataclass(slots=True)
+@dataclass
 class InfluxDBSection:
     enabled: bool = False
     url: str = ""
@@ -29,7 +29,7 @@ class InfluxDBSection:
     bucket: str = ""
 
 
-@dataclass(slots=True)
+@dataclass
 class RosDiagnosticsSection:
     enabled: bool = False
     input_topic: str = "/diagnostics"
@@ -38,20 +38,20 @@ class RosDiagnosticsSection:
     aggregation_root: str = "Robot"
 
 
-@dataclass(slots=True)
+@dataclass
 class JsonFileSection:
     enabled: bool = False
     path: str = "/tmp/diagnostics.jsonl"
     max_file_size_mb: float = 100.0
 
 
-@dataclass(slots=True)
+@dataclass
 class StdoutSection:
     enabled: bool = False
     interval_sec: float = 10.0
 
 
-@dataclass(slots=True)
+@dataclass
 class SinksSection:
     influxdb: InfluxDBSection = field(default_factory=InfluxDBSection)
     ros_diagnostics: RosDiagnosticsSection = field(default_factory=RosDiagnosticsSection)
@@ -59,7 +59,7 @@ class SinksSection:
     stdout: StdoutSection = field(default_factory=StdoutSection)
 
 
-@dataclass(slots=True)
+@dataclass
 class AggregatorConfig:
     aggregator: AggregatorSection = field(default_factory=AggregatorSection)
     sinks: SinksSection = field(default_factory=SinksSection)
