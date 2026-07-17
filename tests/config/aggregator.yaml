@@ -5,9 +5,9 @@ aggregator:
 
 sinks:
   influxdb:
-    enabled: false
+    enabled: true
     url: "http://localhost:8086"
-    token: "${INFLUXDB_TOKEN}"
+    token: "xbot2-diagnostics-dev-token"
     org: "xbot2"
     bucket: "diagnostics"
 
@@ -24,5 +24,5 @@ sinks:
     max_file_size_mb: 100
 
   stdout:
-    enabled: true
+    enabled: false
     interval_sec: 2.0

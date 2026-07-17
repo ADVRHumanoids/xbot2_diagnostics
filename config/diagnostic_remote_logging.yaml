@@ -1,0 +1,11 @@
+/influxdb_connector:
+  ros__parameters:
+    connection:
+      url: "http://localhost:8086/api/v2/write"
+      token: "xbot2-diagnostics-dev-token"
+      bucket: "diagnostics"
+      organization: "xbot2"
+    send:
+      diagnostics: true
+      period: 1.0
+      top_level_state: false

@@ -15,7 +15,7 @@ CONFIG_ENV_VAR = "XBOT2_DIAGNOSTICS_CONFIG"
 
 @dataclass(slots=True)
 class AggregatorSection:
-    zmq_endpoint: str = "tcp://localhost:5555"
+    zmq_endpoint: str = "tcp://localhost:9268"
     stale_timeout_sec: float = 5.0
     stale_check_interval_sec: float = 1.0
 
@@ -109,7 +109,7 @@ def load_config(path: str | None = None) -> AggregatorConfig:
 
     cfg = AggregatorConfig(
         aggregator=AggregatorSection(
-            zmq_endpoint=str(agg.get("zmq_endpoint", "tcp://localhost:5555")),
+            zmq_endpoint=str(agg.get("zmq_endpoint", "tcp://localhost:9268")),
             stale_timeout_sec=float(agg.get("stale_timeout_sec", 5.0)),
             stale_check_interval_sec=float(agg.get("stale_check_interval_sec", 1.0)),
         ),

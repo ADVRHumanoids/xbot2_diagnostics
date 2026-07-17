@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(xbot2_diagnostics VERSION 0.1.0 LANGUAGES CXX)
 
+include(GNUInstallDirs)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -54,6 +56,16 @@ install(
 install(
     DIRECTORY config launch
     DESTINATION share/${PROJECT_NAME}
+)
+
+configure_file(
+    services/xbot2-host-monitor.service.in
+    ${PROJECT_BINARY_DIR}/xbot2-host-monitor.service
+    @ONLY
+)
+install(
+    FILES ${PROJECT_BINARY_DIR}/xbot2-host-monitor.service
+    DESTINATION lib/systemd/system
 )
 
 # python package

@@ -1,5 +1,6 @@
 import json
 
+import pytest
 import zmq
 
 from pyxbot2_diagnostics.publisher import DiagPublisher
@@ -92,3 +93,20 @@ def test_diag_publisher_does_not_flush_stats_when_throttled() -> None:
     pub.close()
     pull.close(linger=0)
     ctx.term()
+
+
+def test_diag_publisher_drops_when_immediate_peer_is_unavailable() -> None:
+    pub = DiagPublisher(
+        "offline",
+        "host",
+        "tcp://127.0.0.1:59998",
+        send_hwm=1,
+        immediate=True,
+    )
+    assert pub.publish(0, "OK", {"metric": 1.0}) is False
+    pub.close()
+
+
+def test_diag_publisher_rejects_invalid_high_water_mark() -> None:
+    with pytest.raises(ValueError):
+        DiagPublisher("node", "host", send_hwm=0)

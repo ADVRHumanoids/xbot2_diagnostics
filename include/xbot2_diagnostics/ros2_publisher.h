@@ -42,7 +42,11 @@ public:
           value_keys_(std::move(value_keys)),
           throttle_publish_interval_sec_(throttle_publish_interval_sec),
           last_publish_time_(std::chrono::steady_clock::now())
-    {}
+    {
+        if (hw_id_.empty()) {
+            hw_id_ = status_name_;
+        }
+    }
 
     bool should_publish() const
     {

@@ -58,12 +58,24 @@ def test_influxdb_sink_writes_points() -> None:
         write_api=fake,
     )
     sink.handle_message(_msg())
+    # Points are buffered; force a flush by advancing past the flush interval.
+    sink._last_flush = 0.0
+    sink.publish_state({})
 
     assert len(fake.calls) == 1
-    records = fake.calls[0]["record"]
-    assert len(records) == 2
-    assert records[0]["tags"]["node"] == "n1"
-    assert records[0]["tags"]["stat"] in {"mean", "max"}
+    points = fake.calls[0]["record"]
+    assert len(points) == 1
+    point = points[0]
+    assert point["measurement"] == "robot_diagnostics"
+    assert point["tags"]["hw_id"] == "hw"
+    assert point["tags"]["path"] == "n1"
+    assert point["tags"]["name"] == "n1"
+    # numeric kv-pairs are individual fields
+    assert point["fields"]["torque_error.mean"] == 0.1
+    assert point["fields"]["torque_error.max"] == 0.3
+    # non-numeric values fall back to string fields
+    assert point["fields"]["text"] == "hello"
+    assert point["fields"]["level"] == 0
 
 
 def test_ros_sink_publishes_aggregated_output() -> None:

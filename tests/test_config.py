@@ -8,7 +8,7 @@ from pyxbot2_diagnostics.aggregator.config import CONFIG_ENV_VAR, load_config
 def test_load_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(CONFIG_ENV_VAR, raising=False)
     cfg = load_config()
-    assert cfg.aggregator.zmq_endpoint == "tcp://localhost:5555"
+    assert cfg.aggregator.zmq_endpoint == "tcp://localhost:9268"
     assert cfg.aggregator.stale_timeout_sec == 5.0
     assert cfg.sinks.influxdb.enabled is False
     assert cfg.sinks.ros_diagnostics.input_topic == "/diagnostics"

@@ -7,7 +7,7 @@ Diagnostics and observability for HHCM's xbot2 framework.
 A Python aggregator is available under `/aggregator`.
 
 ### Features
-- ZMQ `PULL` fan-in on configurable endpoint (`tcp://localhost:5555` default)
+- ZMQ `PULL` fan-in on configurable endpoint (`tcp://localhost:9268` default)
 - Per-node state cache
 - Stale detection (`level=3`) with configurable timeout/check interval
 - JSON schema validation for incoming diagnostics messages
@@ -38,7 +38,7 @@ Pass with `--config` or `XBOT2_DIAGNOSTICS_CONFIG`.
 
 ```yaml
 aggregator:
-  zmq_endpoint: "tcp://localhost:5555"
+  zmq_endpoint: "tcp://localhost:9268"
   stale_timeout_sec: 5.0
   stale_check_interval_sec: 1.0
 
@@ -71,6 +71,37 @@ sinks:
 ```bash
 python -m pyxbot2_diagnostics.aggregator.aggregator_node --config /path/to/config.yaml
 ```
+
+## Local host monitor
+
+`xbot2-host-monitor` collects Linux CPU, memory, temperature, filesystem, disk I/O,
+network, uptime, and optional battery/NVIDIA GPU metrics. It publishes independent
+`host/<hostname>/...` diagnostics to the same ZMQ aggregator without requiring ROS.
+By default, temperature telemetry contains only the minimum, average, and maximum
+across recognized CPU sensors; individual, disk, and other temperatures are omitted.
+When `/proc/xenomai/sched/stat` is available, the monitor also publishes each
+non-IRQ Xenomai scheduler entry with its mode-switch count and CPU load.
+
+```bash
+xbot2-host-monitor --config config/host_monitor.yaml
+# A single best-effort sample for smoke testing:
+xbot2-host-monitor --config config/host_monitor.yaml --once
+```
+
+The endpoint precedence is `--endpoint`, `host_monitor.zmq_endpoint`,
+`XBOT_DIAG_ENDPOINT`, then `tcp://localhost:9268`. The config file itself can be
+selected with `--config` or `XBOT2_HOST_MONITOR_CONFIG`. Metric thresholds,
+collectors, interface filters, and required interfaces are documented in
+`config/host_monitor.yaml`.
+
+For boot-time operation, install the project and enable the supplied unit:
+
+```bash
+sudo systemctl enable --now xbot2-host-monitor.service
+```
+
+Site-specific `XBOT2_HOST_MONITOR_CONFIG` or `XBOT_DIAG_ENDPOINT` values can be
+placed in `/etc/default/xbot2-host-monitor`.
 
 
 ## Local Grafana and InfluxDB
@@ -106,4 +137,3 @@ ros2 launch launch/diagnostic_remote_logging.launch.py
 
 Grafana is available at `http://localhost:3000` and InfluxDB at `http://localhost:8086`.
 The default development credentials are documented in `docker/.env.example`; use local secrets for anything beyond development.
-
