@@ -595,8 +595,10 @@ class XenomaiProcCollector:
 
         samples: list[MetricSample] = []
         for entry in parse_xenomai_sched_stat(text):
+            if 'ROOT' in entry.name:
+                continue
             entry_name = sanitize_name(entry.name)
-            path = f"xenomai.{entry_name}.{entry.cpu}.{entry.pid}"
+            path = f"xenomai.{entry_name}"
             samples.append(MetricSample(
                 path,
                 finite_values({

@@ -77,6 +77,7 @@ python -m pyxbot2_diagnostics.aggregator.aggregator_node --config /path/to/confi
 `xbot2-host-monitor` collects Linux CPU, memory, temperature, filesystem, disk I/O,
 network, uptime, and optional battery/NVIDIA GPU metrics. It publishes independent
 `host/<hostname>/...` diagnostics to the same ZMQ aggregator without requiring ROS.
+The Python implementation supports Python 3.8 and newer.
 By default, temperature telemetry contains only the minimum, average, and maximum
 across recognized CPU sensors; individual, disk, and other temperatures are omitted.
 When `/proc/xenomai/sched/stat` is available, the monitor also publishes each
