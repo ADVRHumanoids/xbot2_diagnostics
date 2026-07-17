@@ -10,7 +10,6 @@ host_monitor:
   aggregate_cpu_temperatures_only: true
 
   excluded_interfaces:
-    - "lo"
     - "docker*"
     - "veth*"
     - "br-*"
