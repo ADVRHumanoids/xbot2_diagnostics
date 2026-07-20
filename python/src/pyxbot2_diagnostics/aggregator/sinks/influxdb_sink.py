@@ -94,13 +94,23 @@ class InfluxDBSink:
         if message.msg:
             fields["message"] = message.msg
 
+        """
+        node schema is defined as follows:
+        <component...>/<name>/<measurement>
+
+        example: /xbot/joint/knee_pitch_1/pos_ref -->
+          component = /xbot/joint
+          name = knee_pitch_1
+          measurement = pos_ref
+        """
+
         self._pending.append(
             {
-                "measurement": _MEASUREMENT,
+                "measurement": parts[-1],
                 "tags": {
                     "hw_id": message.hw_id if message.hw_id else "unknown",
                     "path": path,
-                    "name": "/".join(parts[-2:]) if parts else path,
+                    "name":parts[-2],
                     "component": "/".join(parts[:-2]) if parts else path,
                 },
                 "fields": fields,
