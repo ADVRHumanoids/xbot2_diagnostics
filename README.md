@@ -55,6 +55,7 @@ sinks:
     input_topic: "/diagnostics"
     aggregated_topic: "/diagnostics_agg"
     publish_aggregated: true
+    publish_rate_hz: 1.0
     aggregation_root: "Robot"
 
   json_file:
@@ -81,7 +82,7 @@ The Python implementation supports Python 3.8 and newer.
 By default, temperature telemetry contains only the minimum, average, and maximum
 across recognized CPU sensors; individual, disk, and other temperatures are omitted.
 When `/proc/xenomai/sched/stat` is available, the monitor also publishes each
-non-IRQ Xenomai scheduler entry with its mode-switch count and CPU load.
+non-IRQ, non-root Xenomai scheduler entry with its mode-switch count and CPU load.
 
 ```bash
 xbot2-host-monitor --config config/host_monitor.yaml

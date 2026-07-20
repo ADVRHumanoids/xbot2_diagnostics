@@ -50,6 +50,7 @@ def _build_ros_io(config: AggregatorConfig) -> tuple[RosDiagnosticsSource | None
         sink = RosDiagnosticsSink(
             aggregated_publisher=_publish,
             aggregation_root=ros_config.aggregation_root,
+            publish_rate_hz=ros_config.publish_rate_hz,
             time_fn=time.time,
             stamp_fn=lambda: node.get_clock().now().to_msg(),
         )

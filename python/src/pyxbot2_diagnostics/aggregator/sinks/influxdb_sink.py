@@ -104,14 +104,18 @@ class InfluxDBSink:
           measurement = pos_ref
         """
 
+        measurement = parts[-1] if parts else "unknown"
+        name = parts[-2] if len(parts) >= 2 else measurement
+        component = "/".join(parts[:-2])
+
         self._pending.append(
             {
-                "measurement": parts[-1],
+                "measurement": measurement,
                 "tags": {
                     "hw_id": message.hw_id if message.hw_id else "unknown",
                     "path": path,
-                    "name":parts[-2],
-                    "component": "/".join(parts[:-2]) if parts else path,
+                    "name": name,
+                    "component": component,
                 },
                 "fields": fields,
                 "time": int(1e9 * time.time()),

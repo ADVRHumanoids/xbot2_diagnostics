@@ -14,6 +14,7 @@ def test_load_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.sinks.ros_diagnostics.input_topic == "/diagnostics"
     assert cfg.sinks.ros_diagnostics.aggregated_topic == "/diagnostics_agg"
     assert cfg.sinks.ros_diagnostics.publish_aggregated is True
+    assert cfg.sinks.ros_diagnostics.publish_rate_hz == 1.0
     assert cfg.sinks.ros_diagnostics.aggregation_root == "Robot"
 
 
@@ -33,6 +34,7 @@ sinks:
     input_topic: "/diagnostics"
     aggregated_topic: "/robot_monitor/diagnostics_agg"
     publish_aggregated: true
+    publish_rate_hz: 2.5
     aggregation_root: "Robot"
   stdout:
     enabled: true
@@ -50,6 +52,7 @@ sinks:
     assert cfg.sinks.ros_diagnostics.input_topic == "/diagnostics"
     assert cfg.sinks.ros_diagnostics.aggregated_topic == "/robot_monitor/diagnostics_agg"
     assert cfg.sinks.ros_diagnostics.publish_aggregated is True
+    assert cfg.sinks.ros_diagnostics.publish_rate_hz == 2.5
     assert cfg.sinks.ros_diagnostics.aggregation_root == "Robot"
     assert cfg.sinks.stdout.interval_sec == 2.0
 
@@ -73,4 +76,19 @@ sinks:
         encoding="utf-8",
     )
     with pytest.raises(ValueError):
+        load_config(str(cfg_path))
+
+
+def test_ros_diagnostics_requires_positive_publish_rate(tmp_path) -> None:
+    cfg_path = tmp_path / "bad_ros_rate.yaml"
+    cfg_path.write_text(
+        """
+sinks:
+  ros_diagnostics:
+    enabled: true
+    publish_rate_hz: 0
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="publish_rate_hz"):
         load_config(str(cfg_path))

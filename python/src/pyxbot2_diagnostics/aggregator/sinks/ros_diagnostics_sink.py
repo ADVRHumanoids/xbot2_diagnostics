@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -49,11 +50,18 @@ class RosDiagnosticsSink:
         stamp_fn: Callable[[], Any] | None = None,
         *,
         aggregation_root: str = "Robot",
+        publish_rate_hz: float = 1.0,
+        rate_time_fn: Callable[[], float] = time.monotonic,
     ) -> None:
+        if publish_rate_hz <= 0:
+            raise ValueError("publish_rate_hz must be > 0")
         self._aggregated_publisher = aggregated_publisher
         self._time_fn = time_fn
         self._stamp_fn = stamp_fn
         self._aggregation_root = aggregation_root.strip("/") or "Robot"
+        self._publish_period_sec = 1.0 / publish_rate_hz
+        self._rate_time_fn = rate_time_fn
+        self._last_publish_time: float | None = None
 
     @staticmethod
     def _to_kv(kv: DiagnosticKeyValue) -> RosKeyValue:
@@ -133,6 +141,13 @@ class RosDiagnosticsSink:
         del message
 
     def publish_state(self, states: dict[str, DiagnosticsMessage]) -> None:
+        now = self._rate_time_fn()
+        if (
+            self._last_publish_time is not None
+            and (now - self._last_publish_time) < self._publish_period_sec
+        ):
+            return
+        self._last_publish_time = now
         aggregated_array = self._new_array()
         aggregated_array.status = self._build_aggregated_statuses(states)
         self._aggregated_publisher(aggregated_array)

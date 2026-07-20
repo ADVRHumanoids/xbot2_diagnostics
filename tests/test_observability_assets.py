@@ -41,6 +41,7 @@ def test_aggregator_config_publishes_aggregated_diagnostics() -> None:
     assert ros["input_topic"] == "/diagnostics"
     assert ros["aggregated_topic"] == "/diagnostics_agg"
     assert ros["publish_aggregated"] is True
+    assert ros["publish_rate_hz"] == 1.0
 
 
 def test_host_monitor_assets() -> None:

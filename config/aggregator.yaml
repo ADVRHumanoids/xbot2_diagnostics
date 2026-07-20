@@ -16,6 +16,7 @@ sinks:
     input_topic: "/diagnostics"
     aggregated_topic: "/diagnostics_agg"
     publish_aggregated: true
+    publish_rate_hz: 1.0
     aggregation_root: "Robot"
 
   json_file:

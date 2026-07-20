@@ -57,7 +57,7 @@ def test_influxdb_sink_writes_points() -> None:
         bucket="diagnostics",
         write_api=fake,
     )
-    sink.handle_message(_msg())
+    sink.handle_message(_msg("/xbot/joint/knee_pitch_1/pos_ref"))
     # Points are buffered; force a flush by advancing past the flush interval.
     sink._last_flush = 0.0
     sink.publish_state({})
@@ -66,16 +66,38 @@ def test_influxdb_sink_writes_points() -> None:
     points = fake.calls[0]["record"]
     assert len(points) == 1
     point = points[0]
-    assert point["measurement"] == "robot_diagnostics"
+    assert point["measurement"] == "pos_ref"
     assert point["tags"]["hw_id"] == "hw"
-    assert point["tags"]["path"] == "n1"
-    assert point["tags"]["name"] == "n1"
+    assert point["tags"]["path"] == "/xbot/joint/knee_pitch_1/pos_ref"
+    assert point["tags"]["name"] == "knee_pitch_1"
+    assert point["tags"]["component"] == "xbot/joint"
     # numeric kv-pairs are individual fields
     assert point["fields"]["torque_error.mean"] == 0.1
     assert point["fields"]["torque_error.max"] == 0.3
     # non-numeric values fall back to string fields
     assert point["fields"]["text"] == "hello"
     assert point["fields"]["level"] == 0
+
+
+def test_influxdb_sink_accepts_single_segment_path() -> None:
+    fake = FakeWriteApi()
+    sink = InfluxDBSink(
+        enabled=True,
+        url="",
+        token="",
+        org="xbot2",
+        bucket="diagnostics",
+        write_api=fake,
+    )
+
+    sink.handle_message(_msg("n1"))
+    sink._last_flush = 0.0
+    sink.publish_state({})
+
+    point = fake.calls[0]["record"][0]
+    assert point["measurement"] == "n1"
+    assert point["tags"]["name"] == "n1"
+    assert point["tags"]["component"] == ""
 
 
 def test_ros_sink_publishes_aggregated_output() -> None:
@@ -109,6 +131,30 @@ def test_ros_sink_publishes_aggregated_output() -> None:
     assert statuses["/Robot/xbot/thread/nrt_main/load"].message == "WARN"
     assert statuses["/Robot/xbot/thread/nrt_main/load"].hardware_id == "hw"
     assert statuses["/Robot/xbot/thread/nrt_main/load"].values[0].key == "torque_error.mean"
+
+
+def test_ros_sink_limits_publication_to_configured_rate() -> None:
+    aggregated_published = []
+    clock = FakeClock(10.0)
+    sink = RosDiagnosticsSink(
+        aggregated_publisher=aggregated_published.append,
+        time_fn=clock,
+        publish_rate_hz=1.0,
+        rate_time_fn=clock,
+    )
+    states = {"/xbot/status": _msg("/xbot/status")}
+
+    for _ in range(146):
+        sink.publish_state(states)
+    assert len(aggregated_published) == 1
+
+    clock.advance(0.999)
+    sink.publish_state(states)
+    assert len(aggregated_published) == 1
+
+    clock.advance(0.001)
+    sink.publish_state(states)
+    assert len(aggregated_published) == 2
 
 
 def test_ros_sink_does_not_duplicate_robot_root_and_preserves_raw_segments() -> None:

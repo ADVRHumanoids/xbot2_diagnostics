@@ -298,18 +298,17 @@ def test_parse_xenomai_sched_stat_accepts_load_header() -> None:
     ]
 
 
-def test_xenomai_collector_publishes_one_sample_per_entry(tmp_path) -> None:
+def test_xenomai_collector_skips_root_and_uses_stable_name_paths(tmp_path) -> None:
     path = tmp_path / "stat"
     path.write_text(XENOMAI_STAT, encoding="utf-8")
     collector = XenomaiProcCollector(HostMonitorConfig(xenomai_stat_path=str(path)))
     samples = collector.sample(0.0)
     assert [sample.path for sample in samples] == [
-        "xenomai.ROOT_0.0.0",
-        "xenomai.latency.1.852",
-        "xenomai.control_loop.0.900",
+        "xenomai.latency",
+        "xenomai.control_loop",
     ]
-    assert samples[2].values == {"msw.count": 12.0, "load.percent": 14.5}
-    assert samples[2].summary == "control loop: load 14.5%, MSW 12 (CPU 0, PID 900)"
+    assert samples[1].values == {"msw.count": 12.0, "load.percent": 14.5}
+    assert samples[1].summary == "control loop: load 14.5%, MSW 12 (CPU 0, PID 900)"
 
 
 def test_xenomai_collector_is_optional_when_proc_file_is_missing(tmp_path) -> None:

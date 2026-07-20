@@ -35,6 +35,7 @@ class RosDiagnosticsSection:
     input_topic: str = "/diagnostics"
     aggregated_topic: str = "/diagnostics_agg"
     publish_aggregated: bool = True
+    publish_rate_hz: float = 1.0
     aggregation_root: str = "Robot"
 
 
@@ -126,6 +127,7 @@ def load_config(path: str | None = None) -> AggregatorConfig:
                 input_topic=str(ros_diagnostics.get("input_topic", "/diagnostics")),
                 aggregated_topic=str(ros_diagnostics.get("aggregated_topic", "/diagnostics_agg")),
                 publish_aggregated=_as_bool(ros_diagnostics.get("publish_aggregated"), True),
+                publish_rate_hz=float(ros_diagnostics.get("publish_rate_hz", 1.0)),
                 aggregation_root=str(ros_diagnostics.get("aggregation_root", "Robot")),
             ),
             json_file=JsonFileSection(
@@ -153,6 +155,8 @@ def load_config(path: str | None = None) -> AggregatorConfig:
             raise ValueError("sinks.ros_diagnostics.input_topic must be non-empty")
         if cfg.sinks.ros_diagnostics.publish_aggregated and not cfg.sinks.ros_diagnostics.aggregated_topic:
             raise ValueError("sinks.ros_diagnostics.aggregated_topic must be non-empty")
+        if cfg.sinks.ros_diagnostics.publish_rate_hz <= 0:
+            raise ValueError("sinks.ros_diagnostics.publish_rate_hz must be > 0")
         if not cfg.sinks.ros_diagnostics.aggregation_root.strip("/"):
             raise ValueError("sinks.ros_diagnostics.aggregation_root must be non-empty")
 
