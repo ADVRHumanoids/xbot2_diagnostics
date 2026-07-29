@@ -1,3 +1,4 @@
+from io import StringIO
 from types import SimpleNamespace
 
 import pytest
@@ -12,9 +13,11 @@ from pyxbot2_diagnostics.host_monitor.collectors import (
     NetworkCollector,
     NvidiaGpuCollector,
     SystemCollector,
+    TegrastatsCollector,
     TemperatureCollector,
     XenomaiProcCollector,
     finite_values,
+    parse_tegrastats,
     parse_xenomai_sched_stat,
     sanitize_name,
 )
@@ -271,6 +274,85 @@ def test_nvidia_gpu_collector_is_timeout_bounded() -> None:
 
     collector = NvidiaGpuCollector(HostMonitorConfig(), runner=timeout)
     assert collector.sample(0.0) == []
+
+
+TEGRASTATS = """\
+RAM 220/7766MB (lfb 79x4MB) SWAP 0/3883MB (cached 0MB) CPU [1%@102,off,4%@102,0%@102] EMC_FREQ 8%@1600 GR3D_FREQ 35%@318 APE 150 MTS fg 0% bg 0% AO@35.5C GPU@36C Tdiode@37.25C VDD_IN 2532mW/2500mW VDD_CPU_GPU_CV 432mW/400mW
+"""
+
+
+TEGRASTATS_JETSON = """\
+07-29-2026 12:21:57 RAM 2189/62827MB (lfb 2x4MB) SWAP 0/31413MB (cached 0MB) CPU [1%@729,0%@729,1%@729,1%@729,1%@2201,0%@2201,100%@2201,0%@2201,0%@1420,0%@1420,1%@1420,1%@1420] GR3D_FREQ 0% cpu@51.031C soc2@47.687C soc0@47.406C gpu@47.125C tj@51.031C soc1@46.312C VDD_GPU_SOC 3342mW/3342mW VDD_CPU_CV 1909mW/1909mW VIN_SYS_5V0 3717mW/3717mW
+"""
+
+
+def test_parse_tegrastats_extracts_jetson_metrics() -> None:
+    values = parse_tegrastats(TEGRASTATS)
+    assert values["ram.percent"] == pytest.approx(100.0 * 220.0 / 7766.0)
+    assert values["swap.total_mib"] == 3883.0
+    assert values["cpu.utilization.percent"] == pytest.approx(5.0 / 3.0)
+    assert values["cpu.active_cores"] == 3.0
+    assert values["emc.utilization.percent"] == 8.0
+    assert values["gpu.utilization.percent"] == 35.0
+    assert values["temperature.Tdiode.c"] == 37.25
+    assert values["power.vdd_cpu_gpu_cv.current_mw"] == 432.0
+    assert values["power.vdd_in.average_mw"] == 2500.0
+
+
+def test_parse_tegrastats_accepts_timestamped_orin_output() -> None:
+    values = parse_tegrastats(TEGRASTATS_JETSON)
+    assert values["ram.used_mib"] == 2189.0
+    assert values["cpu.active_cores"] == 12.0
+    assert values["cpu.utilization.percent"] == pytest.approx(106.0 / 12.0)
+    assert values["gpu.utilization.percent"] == 0.0
+    assert values["temperature.cpu.c"] == 51.031
+    assert values["temperature.soc2.c"] == 47.687
+    assert values["power.vdd_gpu_soc.current_mw"] == 3342.0
+    assert values["power.vin_sys_5v0.average_mw"] == 3717.0
+
+
+def test_tegrastats_collector_publishes_jetson_sample_and_disables_when_missing() -> None:
+    class Process:
+        def __init__(self, output: str) -> None:
+            self.stdout = StringIO(output)
+            self.terminated = False
+
+        def poll(self):
+            return None if not self.terminated else 0
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def wait(self, timeout=None) -> int:
+            return 0
+
+        def kill(self) -> None:
+            self.terminated = True
+
+    process = Process(TEGRASTATS)
+    collector = TegrastatsCollector(
+        HostMonitorConfig(),
+        popen_factory=lambda *args, **kwargs: process,
+        line_waiter=lambda *args, **kwargs: ([process.stdout], [], []),
+    )
+    sample = collector.sample(0.0)[0]
+    assert sample.path == "tegrastats"
+    assert sample.values["gpu.utilization.percent"] == 35.0
+    assert len(sample.alerts) == 4
+    assert sample.summary == "RAM 220/7766 MiB, CPU 1.7%, GPU 35.0%, max temp 37.2 °C"
+    assert process.terminated is True
+
+    calls = 0
+
+    def missing(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise FileNotFoundError
+
+    unsupported = TegrastatsCollector(HostMonitorConfig(), popen_factory=missing)
+    assert unsupported.sample(0.0) == []
+    assert unsupported.sample(1.0) == []
+    assert calls == 1
 
 
 XENOMAI_STAT = """\

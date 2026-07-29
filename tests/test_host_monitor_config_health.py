@@ -21,7 +21,9 @@ def test_host_monitor_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.sample_interval_sec == 1.0
     assert config.hw_id == config.hostname
     assert config.aggregate_cpu_temperatures_only is True
+    assert config.collectors.tegrastats is True
     assert config.collectors.xenomai is True
+    assert config.tegrastats_command == "tegrastats"
     assert config.xenomai_stat_path == "/proc/xenomai/sched/stat"
     assert config.thresholds.consecutive_samples == 3
     assert "lo" in config.excluded_interfaces

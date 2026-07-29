@@ -42,6 +42,7 @@ class CollectorConfig:
     network: bool = True
     battery: bool = True
     gpu: bool = True
+    tegrastats: bool = True
     xenomai: bool = True
 
 
@@ -85,6 +86,8 @@ class HostMonitorConfig:
     )
     gpu_command: str = "nvidia-smi"
     gpu_timeout_sec: float = 1.0
+    tegrastats_command: str = "tegrastats"
+    tegrastats_timeout_sec: float = 2.0
     xenomai_stat_path: str = "/proc/xenomai/sched/stat"
     collectors: CollectorConfig = field(default_factory=CollectorConfig)
     thresholds: ThresholdConfig = field(default_factory=ThresholdConfig)
@@ -170,6 +173,10 @@ def load_host_monitor_config(path: str | None = None) -> HostMonitorConfig:
         ),
         gpu_command=str(raw.get("gpu_command", defaults.gpu_command)),
         gpu_timeout_sec=float(raw.get("gpu_timeout_sec", defaults.gpu_timeout_sec)),
+        tegrastats_command=str(raw.get("tegrastats_command", defaults.tegrastats_command)),
+        tegrastats_timeout_sec=float(
+            raw.get("tegrastats_timeout_sec", defaults.tegrastats_timeout_sec)
+        ),
         xenomai_stat_path=str(raw.get("xenomai_stat_path", defaults.xenomai_stat_path)),
         collectors=collectors,
         thresholds=ThresholdConfig(**threshold_values),
@@ -183,6 +190,8 @@ def _validate(config: HostMonitorConfig) -> None:
         raise ValueError("host_monitor.sample_interval_sec must be > 0")
     if config.gpu_timeout_sec <= 0:
         raise ValueError("host_monitor.gpu_timeout_sec must be > 0")
+    if config.tegrastats_timeout_sec <= 0:
+        raise ValueError("host_monitor.tegrastats_timeout_sec must be > 0")
     if not config.xenomai_stat_path:
         raise ValueError("host_monitor.xenomai_stat_path must be non-empty")
     if config.thresholds.consecutive_samples <= 0:

@@ -39,6 +39,9 @@ host_monitor:
 
   gpu_command: "nvidia-smi"
   gpu_timeout_sec: 1.0
+  # Optional on non-Jetson systems; unavailable commands disable themselves.
+  tegrastats_command: "tegrastats"
+  tegrastats_timeout_sec: 2.0
   xenomai_stat_path: "/proc/xenomai/sched/stat"
 
   collectors:
@@ -51,6 +54,7 @@ host_monitor:
     network: true
     battery: true
     gpu: true
+    tegrastats: true
     xenomai: true
 
   thresholds:

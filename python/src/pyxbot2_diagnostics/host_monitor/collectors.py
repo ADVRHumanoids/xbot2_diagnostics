@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import math
 import re
+import select
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -110,6 +111,58 @@ def parse_xenomai_sched_stat(text: str) -> list[XenomaiSchedEntry]:
         except (ValueError, IndexError):
             continue
     return entries
+
+
+def parse_tegrastats(text: str) -> dict[str, float]:
+    """Extract stable metrics from a single ``tegrastats`` output line.
+
+    NVIDIA changes the set of fields between Jetson releases, so unknown fields
+    are deliberately ignored and only metrics that occur in the output are
+    published.
+    """
+    values: dict[str, float] = {}
+    ram = re.search(r"\bRAM\s+(\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)MB", text, re.IGNORECASE)
+    if ram:
+        used, total = (float(value) for value in ram.groups())
+        values.update({
+            "ram.used_mib": used,
+            "ram.total_mib": total,
+            "ram.percent": 100.0 * used / total if total > 0 else 0.0,
+        })
+
+    swap = re.search(r"\bSWAP\s+(\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)MB", text, re.IGNORECASE)
+    if swap:
+        used, total = (float(value) for value in swap.groups())
+        values.update({
+            "swap.used_mib": used,
+            "swap.total_mib": total,
+            "swap.percent": 100.0 * used / total if total > 0 else 0.0,
+        })
+
+    cpu = re.search(r"\bCPU\s*\[([^]]*)\]", text, re.IGNORECASE)
+    if cpu:
+        utilization = [float(value) for value in re.findall(r"(\d+(?:\.\d+)?)%", cpu.group(1))]
+        if utilization:
+            values["cpu.utilization.percent"] = sum(utilization) / len(utilization)
+            values["cpu.active_cores"] = float(len(utilization))
+
+    for field, key in (("EMC_FREQ", "emc.utilization.percent"), ("GR3D_FREQ", "gpu.utilization.percent")):
+        match = re.search(rf"\b{field}\s+(\d+(?:\.\d+)?)%", text, re.IGNORECASE)
+        if match:
+            values[key] = float(match.group(1))
+
+    for sensor, temperature in re.findall(
+        r"\b([A-Za-z][A-Za-z0-9_.-]*)@(-?\d+(?:\.\d+)?)C\b", text
+    ):
+        values[f"temperature.{sanitize_name(sensor)}.c"] = float(temperature)
+
+    for rail, current, average in re.findall(
+        r"\b([A-Z][A-Z0-9_]*)\s+(\d+(?:\.\d+)?)mW/(\d+(?:\.\d+)?)mW\b", text
+    ):
+        rail_name = sanitize_name(rail.lower())
+        values[f"power.{rail_name}.current_mw"] = float(current)
+        values[f"power.{rail_name}.average_mw"] = float(average)
+    return finite_values(values)
 
 
 class SystemCollector:
@@ -580,6 +633,98 @@ class NvidiaGpuCollector:
         return samples
 
 
+class TegrastatsCollector:
+    """Collect Jetson SoC telemetry using NVIDIA's optional ``tegrastats`` tool."""
+
+    name = "tegrastats"
+
+    def __init__(
+        self,
+        config: HostMonitorConfig,
+        popen_factory: Callable[..., Any] = subprocess.Popen,
+        line_waiter: Callable[..., Any] = select.select,
+    ) -> None:
+        self._config = config
+        self._popen_factory = popen_factory
+        self._line_waiter = line_waiter
+        self._unsupported = False
+        self._has_succeeded = False
+
+    def sample(self, now: float) -> list[MetricSample]:
+        del now
+        if self._unsupported:
+            return []
+        try:
+            process = self._popen_factory(
+                [self._config.tegrastats_command, "--interval", "1000"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+        except FileNotFoundError:
+            if not self._has_succeeded:
+                self._unsupported = True
+                return []
+            raise
+
+        try:
+            readable, _, _ = self._line_waiter(
+                [process.stdout], [], [], self._config.tegrastats_timeout_sec
+            )
+            if not readable:
+                raise subprocess.TimeoutExpired(
+                    self._config.tegrastats_command, self._config.tegrastats_timeout_sec
+                )
+            line = process.stdout.readline()
+        except subprocess.TimeoutExpired:
+            if not self._has_succeeded:
+                self._unsupported = True
+                return []
+            raise
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=0.1)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+
+        values = parse_tegrastats(line) if line.strip() else {}
+        if not values:
+            return []
+        self._has_succeeded = True
+
+        thresholds = self._config.thresholds
+        alerts: list[AlertObservation] = []
+        if "ram.percent" in values:
+            alerts.append(AlertObservation(
+                "tegrastats.ram", "Jetson RAM usage", values["ram.percent"],
+                thresholds.ram_warn_percent, thresholds.ram_error_percent, unit="%",
+            ))
+        for key, temperature in values.items():
+            if key.startswith("temperature.") and key.endswith(".c"):
+                sensor = key[len("temperature."):-len(".c")]
+                alerts.append(AlertObservation(
+                    f"tegrastats.temperature.{sensor}", f"Jetson {sensor} temperature", temperature,
+                    thresholds.temperature_warn_c, thresholds.temperature_error_c, unit="°C",
+                ))
+
+        summary_parts: list[str] = []
+        if "ram.used_mib" in values and "ram.total_mib" in values:
+            summary_parts.append(
+                f"RAM {values['ram.used_mib']:.0f}/{values['ram.total_mib']:.0f} MiB"
+            )
+        if "cpu.utilization.percent" in values:
+            summary_parts.append(f"CPU {values['cpu.utilization.percent']:.1f}%")
+        if "gpu.utilization.percent" in values:
+            summary_parts.append(f"GPU {values['gpu.utilization.percent']:.1f}%")
+        temperatures = [value for key, value in values.items() if key.startswith("temperature.")]
+        if temperatures:
+            summary_parts.append(f"max temp {max(temperatures):.1f} °C")
+        return [MetricSample("tegrastats", values, alerts, ", ".join(summary_parts) or "Jetson telemetry available")]
+
+
 class XenomaiProcCollector:
     name = "xenomai"
 
@@ -625,6 +770,7 @@ def build_collectors(config: HostMonitorConfig) -> list[Any]:
         (enabled.network, NetworkCollector(config)),
         (enabled.battery, BatteryCollector(config)),
         (enabled.gpu, NvidiaGpuCollector(config)),
+        (enabled.tegrastats, TegrastatsCollector(config)),
         (enabled.xenomai, XenomaiProcCollector(config)),
     )
     return [collector for is_enabled, collector in candidates if is_enabled]

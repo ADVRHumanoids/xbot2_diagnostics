@@ -76,7 +76,9 @@ python -m pyxbot2_diagnostics.aggregator.aggregator_node --config /path/to/confi
 ## Local host monitor
 
 `xbot2-host-monitor` collects Linux CPU, memory, temperature, filesystem, disk I/O,
-network, uptime, and optional battery/NVIDIA GPU metrics. It publishes independent
+network, uptime, and optional battery/NVIDIA GPU metrics. On Jetson platforms it also
+uses `tegrastats` to publish SoC RAM, CPU/GPU/EMC utilization, thermal sensors, and
+power-rail telemetry. It publishes independent
 `host/<hostname>/...` diagnostics to the same ZMQ aggregator without requiring ROS.
 The Python implementation supports Python 3.8 and newer.
 By default, temperature telemetry contains only the minimum, average, and maximum
