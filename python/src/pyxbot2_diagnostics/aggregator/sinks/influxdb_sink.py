@@ -7,11 +7,20 @@ import time
 from typing import Any
 
 from pyxbot2_diagnostics.aggregator.aggregator import DiagnosticsMessage
+from pyxbot2_diagnostics.aggregator.health import (
+    HealthMessageValidationError,
+    HealthStatus,
+    is_health_message,
+    parse_health_message,
+    timestamp_seconds_to_ns,
+)
 
 LOGGER = logging.getLogger(__name__)
 
-# Single measurement name for all robot diagnostics.
+# Generic measurement name for ordinary robot diagnostics.
 _MEASUREMENT = "robot_diagnostics"
+_DEVICE_HEALTH_MEASUREMENT = "device_health"
+_FAULT_COUNTER_MEASUREMENT = "fault_counter"
 
 # Minimum seconds between batch writes to InfluxDB.
 _FLUSH_INTERVAL_SEC = 1.0
@@ -20,15 +29,21 @@ _FLUSH_INTERVAL_SEC = 1.0
 class InfluxDBSink:
     """Write diagnostics to InfluxDB v2.
 
-    Schema
-    ------
-    measurement : robot_diagnostics
-    tags        : hw_id, path (full status name), name (last path segment)
-    fields      : level (int), one float field per kv-pair in status.values,
-                  message (str, only when non-empty)
+    Ordinary diagnostics retain the existing schema. Messages whose path ends in
+    ``/health`` or ``/health_status`` are validated against the device-health
+    contract and normalized into two measurements:
 
-    Points are buffered in handle_message and flushed as a single batch write
-    at most once per _FLUSH_INTERVAL_SEC to avoid per-message HTTP overhead.
+    ``device_health``
+        tags: hw_id, path, device_path, schema, schema_version, boot_id
+        fields: level, active_fault_count, message, plus non-contract scalar values
+
+    ``fault_counter``
+        one point per fault code
+        tags: hw_id, path, device_path, fault_code, schema_version, boot_id
+        fields: active, raise_count_total, last_raised_ns, last_cleared_ns
+
+    Invalid health messages are logged and omitted from InfluxDB rather than being
+    written as generic diagnostics with opaque JSON fields.
     """
 
     def __init__(
@@ -79,6 +94,27 @@ class InfluxDBSink:
         if not self._enabled or self._write_api is None:
             return
 
+        if is_health_message(message):
+            self._handle_health_message(message)
+            return
+
+        self._pending.append(self._generic_point(message))
+
+    def _handle_health_message(self, message: DiagnosticsMessage) -> None:
+        try:
+            health = parse_health_message(message)
+        except HealthMessageValidationError as exc:
+            LOGGER.warning("Rejecting invalid health message %s: %s", message.node, exc)
+            return
+
+        sample_time_ns = timestamp_seconds_to_ns(message.stamp)
+        self._pending.append(self._device_health_point(message, health, sample_time_ns))
+        self._pending.extend(
+            self._fault_counter_points(message, health, sample_time_ns)
+        )
+
+    @staticmethod
+    def _generic_point(message: DiagnosticsMessage) -> dict[str, Any]:
         path = message.node
         parts = [p for p in path.split("/") if p]
 
@@ -108,19 +144,83 @@ class InfluxDBSink:
         name = parts[-2] if len(parts) >= 2 else measurement
         component = "/".join(parts[:-2])
 
-        self._pending.append(
-            {
-                "measurement": measurement,
-                "tags": {
-                    "hw_id": message.hw_id if message.hw_id else "unknown",
-                    "path": path,
-                    "name": name,
-                    "component": component,
-                },
-                "fields": fields,
-                "time": int(1e9 * time.time()),
+        return {
+            "measurement": measurement,
+            "tags": {
+                "hw_id": message.hw_id if message.hw_id else "unknown",
+                "path": path,
+                "name": name,
+                "component": component,
+            },
+            "fields": fields,
+            "time": int(1e9 * time.time()),
+        }
+
+    @staticmethod
+    def _device_health_point(
+        message: DiagnosticsMessage,
+        health: HealthStatus,
+        sample_time_ns: int,
+    ) -> dict[str, Any]:
+        fields: dict[str, Any] = {
+            "level": message.level,
+            "active_fault_count": health.active_fault_count,
+        }
+        if message.msg:
+            fields["message"] = message.msg
+
+        # Preserve optional health metadata when it is scalar. Structured optional
+        # values remain JSON strings to avoid dynamic nested InfluxDB schemas.
+        for entry in health.extra_values:
+            fields[entry.key] = _coerce_health_field(entry.value)
+
+        return {
+            "measurement": _DEVICE_HEALTH_MEASUREMENT,
+            "tags": {
+                "hw_id": message.hw_id,
+                "path": message.node,
+                "device_path": health.device_path,
+                "schema": health.schema_name,
+                "schema_version": str(health.schema_version),
+                "boot_id": health.boot_id,
+            },
+            "fields": fields,
+            "time": sample_time_ns,
+        }
+
+    @staticmethod
+    def _fault_counter_points(
+        message: DiagnosticsMessage,
+        health: HealthStatus,
+        sample_time_ns: int,
+    ) -> list[dict[str, Any]]:
+        points: list[dict[str, Any]] = []
+        for fault in health.faults:
+            fields: dict[str, Any] = {
+                "active": fault.active,
+                "raise_count_total": fault.raise_count_total,
             }
-        )
+            if fault.last_raised_ns is not None:
+                fields["last_raised_ns"] = fault.last_raised_ns
+            if fault.last_cleared_ns is not None:
+                fields["last_cleared_ns"] = fault.last_cleared_ns
+
+            points.append(
+                {
+                    "measurement": _FAULT_COUNTER_MEASUREMENT,
+                    "tags": {
+                        "hw_id": message.hw_id,
+                        "path": message.node,
+                        "device_path": health.device_path,
+                        "fault_code": fault.code,
+                        "schema_version": str(health.schema_version),
+                        "boot_id": health.boot_id,
+                    },
+                    "fields": fields,
+                    "time": sample_time_ns,
+                }
+            )
+        return points
 
     def publish_state(self, states: dict[str, DiagnosticsMessage]) -> None:
         del states
@@ -150,3 +250,14 @@ class InfluxDBSink:
                 LOGGER.warning("InfluxDB final flush failed: %s", exc)
         if self._client is not None:
             self._client.close()
+
+
+def _coerce_health_field(value: Any) -> Any:
+    if isinstance(value, (bool, int, float, str)):
+        return value
+    try:
+        import json
+
+        return json.dumps(value, separators=(",", ":"), sort_keys=True)
+    except (TypeError, ValueError):
+        return str(value)
