@@ -11,12 +11,8 @@ from typing import Any, Iterable
 
 from pyxbot2_diagnostics.aggregator.aggregator import DiagnosticKeyValue, DiagnosticsMessage
 
-HEALTH_SCHEMA_NAME = "xbot.device_health"
-HEALTH_SCHEMA_VERSION = 1
 HEALTH_STATUS_SUFFIXES = frozenset({"health", "health_status"})
 
-_SCHEMA_NAME_KEY = "schema.name"
-_SCHEMA_VERSION_KEY = "schema.version"
 _BOOT_ID_KEY = "device.boot_id"
 _ACTIVE_KEY = "faults.active"
 _RAISE_COUNT_KEY = "faults.raise_count_total"
@@ -25,8 +21,6 @@ _LAST_CLEARED_KEY = "faults.last_cleared"
 
 REQUIRED_HEALTH_KEYS = frozenset(
     {
-        _SCHEMA_NAME_KEY,
-        _SCHEMA_VERSION_KEY,
         _BOOT_ID_KEY,
         _ACTIVE_KEY,
         _RAISE_COUNT_KEY,
@@ -56,8 +50,6 @@ class HealthStatus:
     """Normalized device health snapshot."""
 
     device_path: str
-    schema_name: str
-    schema_version: int
     boot_id: str
     faults: tuple[FaultHealthRecord, ...]
     extra_values: tuple[DiagnosticKeyValue, ...]
@@ -94,19 +86,6 @@ def parse_health_message(message: DiagnosticsMessage) -> HealthStatus:
     if missing:
         raise HealthMessageValidationError(
             "health status is missing required keys: " + ", ".join(missing)
-        )
-
-    schema_name = _require_non_empty_string(values[_SCHEMA_NAME_KEY], _SCHEMA_NAME_KEY)
-    if schema_name != HEALTH_SCHEMA_NAME:
-        raise HealthMessageValidationError(
-            f"{_SCHEMA_NAME_KEY} must be '{HEALTH_SCHEMA_NAME}', got '{schema_name}'"
-        )
-
-    schema_version = _parse_schema_version(values[_SCHEMA_VERSION_KEY])
-    if schema_version != HEALTH_SCHEMA_VERSION:
-        raise HealthMessageValidationError(
-            f"unsupported health schema version {schema_version}; "
-            f"expected {HEALTH_SCHEMA_VERSION}"
         )
 
     boot_id = _require_non_empty_string(values[_BOOT_ID_KEY], _BOOT_ID_KEY)
@@ -169,8 +148,6 @@ def parse_health_message(message: DiagnosticsMessage) -> HealthStatus:
     device_path = "/" + "/".join(parts[:-1])
     return HealthStatus(
         device_path=device_path,
-        schema_name=schema_name,
-        schema_version=schema_version,
         boot_id=boot_id,
         faults=tuple(faults),
         extra_values=extra_values,
@@ -211,21 +188,6 @@ def _require_non_empty_string(value: Any, key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise HealthMessageValidationError(f"{key} must be a non-empty string")
     return value.strip()
-
-
-def _parse_schema_version(value: Any) -> int:
-    if isinstance(value, bool):
-        raise HealthMessageValidationError(f"{_SCHEMA_VERSION_KEY} must be an integer")
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        try:
-            return int(value.strip())
-        except ValueError as exc:
-            raise HealthMessageValidationError(
-                f"{_SCHEMA_VERSION_KEY} must be an integer"
-            ) from exc
-    raise HealthMessageValidationError(f"{_SCHEMA_VERSION_KEY} must be an integer")
 
 
 def _decode_json(value: Any, key: str) -> Any:
