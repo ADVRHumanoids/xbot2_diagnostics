@@ -171,9 +171,8 @@ def test_requires_health_suffix_and_device_path() -> None:
         parse_health_message(_health_msg(node="/health"))
 
 
-def test_influx_sink_normalizes_health_message() -> None:
-    fake = FakeWriteApi()
-    sink = InfluxDBSink(
+def _sink(fake: FakeWriteApi) -> InfluxDBSink:
+    return InfluxDBSink(
         enabled=True,
         url="",
         token="",
@@ -182,9 +181,18 @@ def test_influx_sink_normalizes_health_message() -> None:
         write_api=fake,
     )
 
-    sink.handle_message(_health_msg())
+
+def _flush(sink: InfluxDBSink) -> None:
     sink._last_flush = 0.0
     sink.publish_state({})
+
+
+def test_influx_sink_normalizes_health_message() -> None:
+    fake = FakeWriteApi()
+    sink = _sink(fake)
+
+    sink.handle_message(_health_msg())
+    _flush(sink)
 
     points = fake.calls[0]["record"]
     assert [point["measurement"] for point in points] == [
@@ -196,7 +204,8 @@ def test_influx_sink_normalizes_health_message() -> None:
     health_point = points[0]
     assert health_point["tags"]["hw_id"] == "SN-1"
     assert health_point["tags"]["device_path"] == "/xbot/joint/knee/motor"
-    assert health_point["tags"]["boot_id"] == "boot-a"
+    assert "boot_id" not in health_point["tags"]
+    assert health_point["fields"]["boot_id"] == "boot-a"
     assert health_point["fields"]["level"] == 2
     assert health_point["fields"]["active_fault_count"] == 1
     assert health_point["fields"]["thermal.temperature"] == 72.5
@@ -206,26 +215,106 @@ def test_influx_sink_normalizes_health_message() -> None:
     fault_points = {point["tags"]["fault_code"]: point for point in points[1:]}
     assert fault_points["OVERCURRENT"]["fields"]["active"] is True
     assert fault_points["OVERCURRENT"]["fields"]["raise_count_total"] == 4
+    assert fault_points["OVERCURRENT"]["fields"]["boot_id"] == "boot-a"
+    assert "boot_id" not in fault_points["OVERCURRENT"]["tags"]
     assert fault_points["ENCODER_CRC"]["fields"]["active"] is False
-    assert fault_points["ENCODER_CRC"]["fields"]["last_cleared_ns"] > 0
+    assert fault_points["ENCODER_CRC"]["fields"]["last_cleared_ms"] > 0
+
+
+def test_influx_sink_emits_fault_occurrence_from_counter_delta() -> None:
+    fake = FakeWriteApi()
+    sink = _sink(fake)
+
+    sink.handle_message(_health_msg(stamp=1785614401.0))
+    updated = _replace_value(
+        _health_msg(stamp=1785614402.0),
+        "faults.raise_count_total",
+        '{"OVERCURRENT":7,"ENCODER_CRC":2}',
+    )
+    updated = _replace_value(
+        updated,
+        "faults.last_raised",
+        '{"OVERCURRENT":"2026-08-01T20:00:01.500Z",'
+        '"ENCODER_CRC":"2026-08-01T19:00:00Z"}',
+    )
+    sink.handle_message(updated)
+    _flush(sink)
+
+    points = fake.calls[0]["record"]
+    occurrences = [
+        point for point in points if point["measurement"] == "fault_occurrence"
+    ]
+    assert len(occurrences) == 1
+    point = occurrences[0]
+    assert point["tags"]["fault_code"] == "OVERCURRENT"
+    assert "boot_id" not in point["tags"]
+    assert point["fields"]["boot_id"] == "boot-a"
+    assert point["fields"]["occurrences"] == 3
+    assert point["fields"]["counter_before"] == 4
+    assert point["fields"]["counter_after"] == 7
+    assert point["fields"]["last_raised_ms"] == 1785614401500
+    assert point["time"] == 1785614402000000000
+
+
+def test_influx_sink_reboot_establishes_new_counter_baseline() -> None:
+    fake = FakeWriteApi()
+    sink = _sink(fake)
+
+    sink.handle_message(_health_msg(stamp=1785614401.0))
+    restarted = _replace_value(_health_msg(stamp=1785614402.0), "device.boot_id", "boot-b")
+    restarted = _replace_value(
+        restarted,
+        "faults.raise_count_total",
+        '{"OVERCURRENT":1,"ENCODER_CRC":0}',
+    )
+    restarted = _replace_value(
+        restarted,
+        "faults.last_raised",
+        '{"OVERCURRENT":"2026-08-01T20:00:01Z","ENCODER_CRC":null}',
+    )
+    restarted = _replace_value(
+        restarted,
+        "faults.last_cleared",
+        '{"OVERCURRENT":null,"ENCODER_CRC":null}',
+    )
+    sink.handle_message(restarted)
+    _flush(sink)
+
+    assert not any(
+        point["measurement"] == "fault_occurrence"
+        for point in fake.calls[0]["record"]
+    )
+
+
+def test_influx_sink_counter_decrease_establishes_new_baseline(caplog) -> None:
+    fake = FakeWriteApi()
+    sink = _sink(fake)
+
+    sink.handle_message(_health_msg(stamp=1785614401.0))
+    decreased = _replace_value(
+        _health_msg(stamp=1785614402.0),
+        "faults.raise_count_total",
+        '{"OVERCURRENT":3,"ENCODER_CRC":2}',
+    )
+    with caplog.at_level(logging.WARNING):
+        sink.handle_message(decreased)
+    _flush(sink)
+
+    assert not any(
+        point["measurement"] == "fault_occurrence"
+        for point in fake.calls[0]["record"]
+    )
+    assert "Fault counter decreased within boot" in caplog.text
 
 
 def test_influx_sink_omits_invalid_health_message(caplog) -> None:
     fake = FakeWriteApi()
-    sink = InfluxDBSink(
-        enabled=True,
-        url="",
-        token="",
-        org="xbot2",
-        bucket="diagnostics",
-        write_api=fake,
-    )
+    sink = _sink(fake)
     invalid = _replace_value(_health_msg(), "schema.version", "99")
 
     with caplog.at_level(logging.WARNING):
         sink.handle_message(invalid)
-    sink._last_flush = 0.0
-    sink.publish_state({})
+    _flush(sink)
 
     assert fake.calls == []
     assert "unsupported health schema version" in caplog.text
