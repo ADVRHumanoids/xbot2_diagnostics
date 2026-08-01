@@ -1,9 +1,4 @@
-# Device health diagnostic schema (draft v1)
-
-This document describes the provisional schema recognized by the Python diagnostics
-aggregator.
-
-## Identification
+# Device health diagnostic contract
 
 A diagnostic is treated as a device-health message when the final segment of its
 `DiagnosticStatus.name` / aggregator `node` is either `health` or `health_status`.
@@ -20,13 +15,11 @@ hardware_id: SN-0028417
 
 ## Required key-value fields
 
-All required values may arrive as JSON strings, as they do in ROS
+Values may arrive as JSON strings, as they do in ROS
 `diagnostic_msgs/KeyValue`. Native JSON values are also accepted by the ZMQ input.
 
 | Key | Type | Meaning |
 |---|---|---|
-| `schema.name` | string | Must equal `xbot.device_health` |
-| `schema.version` | integer or integer string | Must equal `1` |
 | `device.boot_id` | non-empty string | Counter epoch identifier |
 | `faults.active` | array of unique strings | Complete currently active fault set |
 | `faults.raise_count_total` | object: fault code to non-negative integer | Monotonic raise count within `device.boot_id` |
@@ -37,11 +30,11 @@ Timestamps may be non-negative Unix epoch seconds or timezone-aware ISO-8601
 strings. Internally they are normalized to nanoseconds. InfluxDB fields exposed to
 Grafana use Unix epoch milliseconds (`last_raised_ms`, `last_cleared_ms`).
 
-Optional non-contract key-value fields are retained on the `device_health` InfluxDB
-point. Scalar values remain scalar fields; structured values are serialized as
-compact JSON strings.
+Optional device-specific key-value fields are retained on the `device_health`
+InfluxDB point. Scalar values remain scalar fields; structured values are serialized
+as compact JSON strings.
 
-## Consistency rules
+## Validation rules
 
 - Diagnostic keys must be unique.
 - Every active or timestamped fault code must exist in
@@ -65,10 +58,7 @@ One point is written per valid health snapshot.
 Tags:
 
 - `hw_id`
-- `path`
 - `device_path`
-- `schema`
-- `schema_version`
 
 Fields:
 
@@ -76,7 +66,7 @@ Fields:
 - `active_fault_count`
 - `boot_id`
 - `message`, when non-empty
-- optional non-contract health values
+- optional device-specific health values
 
 The point timestamp is the diagnostic source timestamp.
 
@@ -87,10 +77,8 @@ One point is written per known fault code in each valid health snapshot.
 Tags:
 
 - `hw_id`
-- `path`
 - `device_path`
 - `fault_code`
-- `schema_version`
 
 Fields:
 
@@ -109,10 +97,8 @@ A sparse point is written when a cumulative raise counter increases.
 Tags:
 
 - `hw_id`
-- `path`
 - `device_path`
 - `fault_code`
-- `schema_version`
 
 Fields:
 
@@ -134,7 +120,7 @@ warning and establishes a new baseline. None of these baseline cases emits a
 `boot_id` is stored as an Influx field, not a tag, to avoid creating a new series on
 every reboot.
 
-## Decisions still open
+## Open decisions
 
 1. Whether the canonical suffix should be only `/health_status`, only `/health`,
    or whether both aliases should remain supported.
