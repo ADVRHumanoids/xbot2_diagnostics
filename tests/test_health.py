@@ -35,8 +35,6 @@ def _health_msg(
         msg="OVERCURRENT active",
         values=values
         or (
-            DiagnosticKeyValue("schema.name", "xbot.device_health"),
-            DiagnosticKeyValue("schema.version", "1"),
             DiagnosticKeyValue("device.boot_id", "boot-a"),
             DiagnosticKeyValue("faults.active", '["OVERCURRENT"]'),
             DiagnosticKeyValue(
@@ -59,11 +57,7 @@ def _health_msg(
     )
 
 
-def _replace_value(
-    message: DiagnosticsMessage,
-    key: str,
-    value,
-) -> DiagnosticsMessage:
+def _replace_value(message: DiagnosticsMessage, key: str, value) -> DiagnosticsMessage:
     values = tuple(
         DiagnosticKeyValue(entry.key, value if entry.key == key else entry.value)
         for entry in message.values
@@ -76,6 +70,18 @@ def _replace_value(
         level=message.level,
         msg=message.msg,
         values=values,
+    )
+
+
+def _remove_value(message: DiagnosticsMessage, key: str) -> DiagnosticsMessage:
+    return DiagnosticsMessage(
+        v=message.v,
+        node=message.node,
+        hw_id=message.hw_id,
+        stamp=message.stamp,
+        level=message.level,
+        msg=message.msg,
+        values=tuple(entry for entry in message.values if entry.key != key),
     )
 
 
@@ -143,6 +149,11 @@ def test_rejects_duplicate_diagnostic_keys() -> None:
         parse_health_message(message)
 
 
+def test_rejects_missing_required_key() -> None:
+    with pytest.raises(HealthMessageValidationError, match="device.boot_id"):
+        parse_health_message(_remove_value(_health_msg(), "device.boot_id"))
+
+
 def test_rejects_active_fault_missing_from_counter_map() -> None:
     message = _replace_value(
         _health_msg(), "faults.raise_count_total", '{"ENCODER_CRC":2}'
@@ -202,9 +213,10 @@ def test_influx_sink_normalizes_health_message() -> None:
     ]
 
     health_point = points[0]
-    assert health_point["tags"]["hw_id"] == "SN-1"
-    assert health_point["tags"]["device_path"] == "/xbot/joint/knee/motor"
-    assert "boot_id" not in health_point["tags"]
+    assert health_point["tags"] == {
+        "hw_id": "SN-1",
+        "device_path": "/xbot/joint/knee/motor",
+    }
     assert health_point["fields"]["boot_id"] == "boot-a"
     assert health_point["fields"]["level"] == 2
     assert health_point["fields"]["active_fault_count"] == 1
@@ -213,10 +225,14 @@ def test_influx_sink_normalizes_health_message() -> None:
     assert health_point["time"] == 1785614401250000000
 
     fault_points = {point["tags"]["fault_code"]: point for point in points[1:]}
+    assert fault_points["OVERCURRENT"]["tags"] == {
+        "hw_id": "SN-1",
+        "device_path": "/xbot/joint/knee/motor",
+        "fault_code": "OVERCURRENT",
+    }
     assert fault_points["OVERCURRENT"]["fields"]["active"] is True
     assert fault_points["OVERCURRENT"]["fields"]["raise_count_total"] == 4
     assert fault_points["OVERCURRENT"]["fields"]["boot_id"] == "boot-a"
-    assert "boot_id" not in fault_points["OVERCURRENT"]["tags"]
     assert fault_points["ENCODER_CRC"]["fields"]["active"] is False
     assert fault_points["ENCODER_CRC"]["fields"]["last_cleared_ms"] > 0
 
@@ -240,14 +256,18 @@ def test_influx_sink_emits_fault_occurrence_from_counter_delta() -> None:
     sink.handle_message(updated)
     _flush(sink)
 
-    points = fake.calls[0]["record"]
     occurrences = [
-        point for point in points if point["measurement"] == "fault_occurrence"
+        point
+        for point in fake.calls[0]["record"]
+        if point["measurement"] == "fault_occurrence"
     ]
     assert len(occurrences) == 1
     point = occurrences[0]
-    assert point["tags"]["fault_code"] == "OVERCURRENT"
-    assert "boot_id" not in point["tags"]
+    assert point["tags"] == {
+        "hw_id": "SN-1",
+        "device_path": "/xbot/joint/knee/motor",
+        "fault_code": "OVERCURRENT",
+    }
     assert point["fields"]["boot_id"] == "boot-a"
     assert point["fields"]["occurrences"] == 3
     assert point["fields"]["counter_before"] == 4
@@ -310,11 +330,11 @@ def test_influx_sink_counter_decrease_establishes_new_baseline(caplog) -> None:
 def test_influx_sink_omits_invalid_health_message(caplog) -> None:
     fake = FakeWriteApi()
     sink = _sink(fake)
-    invalid = _replace_value(_health_msg(), "schema.version", "99")
+    invalid = _remove_value(_health_msg(), "faults.active")
 
     with caplog.at_level(logging.WARNING):
         sink.handle_message(invalid)
     _flush(sink)
 
     assert fake.calls == []
-    assert "unsupported health schema version" in caplog.text
+    assert "missing required keys" in caplog.text
