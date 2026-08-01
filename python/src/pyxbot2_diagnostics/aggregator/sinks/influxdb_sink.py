@@ -21,9 +21,14 @@ LOGGER = logging.getLogger(__name__)
 _MEASUREMENT = "robot_diagnostics"
 _DEVICE_HEALTH_MEASUREMENT = "device_health"
 _FAULT_COUNTER_MEASUREMENT = "fault_counter"
+_FAULT_OCCURRENCE_MEASUREMENT = "fault_occurrence"
 
 # Minimum seconds between batch writes to InfluxDB.
 _FLUSH_INTERVAL_SEC = 1.0
+
+# (hardware id, status path, fault code) -> (boot id, last total counter)
+FaultCounterKey = tuple[str, str, str]
+FaultCounterState = tuple[str, int]
 
 
 class InfluxDBSink:
@@ -31,16 +36,32 @@ class InfluxDBSink:
 
     Ordinary diagnostics retain the existing schema. Messages whose path ends in
     ``/health`` or ``/health_status`` are validated against the device-health
-    contract and normalized into two measurements:
+    contract and normalized into three measurements:
 
     ``device_health``
-        tags: hw_id, path, device_path, schema, schema_version, boot_id
-        fields: level, active_fault_count, message, plus non-contract scalar values
+        tags: hw_id, path, device_path, schema, schema_version
+        fields: level, active_fault_count, boot_id, message, and optional values
 
     ``fault_counter``
-        one point per fault code
-        tags: hw_id, path, device_path, fault_code, schema_version, boot_id
-        fields: active, raise_count_total, last_raised_ns, last_cleared_ns
+        one point per fault code and health snapshot
+        tags: hw_id, path, device_path, fault_code, schema_version
+        fields: active, raise_count_total, boot_id, last_raised_ms,
+                last_cleared_ms
+
+    ``fault_occurrence``
+        sparse point emitted when a cumulative raise counter increases
+        tags: hw_id, path, device_path, fault_code, schema_version
+        fields: occurrences, counter_before, counter_after, boot_id,
+                last_raised_ms
+
+    ``boot_id`` is deliberately a field rather than a tag to avoid creating a new
+    series on every device reboot. Transition timestamps are stored as Unix epoch
+    milliseconds so Grafana can format them directly as date/time fields. InfluxDB
+    point timestamps remain nanoseconds.
+
+    The first sample for a source/fault or a new boot establishes a baseline and
+    does not emit an occurrence. A counter decrease within the same boot is logged
+    and also establishes a new baseline.
 
     Invalid health messages are logged and omitted from InfluxDB rather than being
     written as generic diagnostics with opaque JSON fields.
@@ -63,6 +84,7 @@ class InfluxDBSink:
         self._write_api = write_api
         self._pending: list[dict[str, Any]] = []
         self._last_flush = 0.0
+        self._fault_counter_state: dict[FaultCounterKey, FaultCounterState] = {}
 
         if not enabled:
             return
@@ -109,9 +131,8 @@ class InfluxDBSink:
 
         sample_time_ns = timestamp_seconds_to_ns(message.stamp)
         self._pending.append(self._device_health_point(message, health, sample_time_ns))
-        self._pending.extend(
-            self._fault_counter_points(message, health, sample_time_ns)
-        )
+        self._pending.extend(self._fault_counter_points(message, health, sample_time_ns))
+        self._pending.extend(self._fault_occurrence_points(message, health, sample_time_ns))
 
     @staticmethod
     def _generic_point(message: DiagnosticsMessage) -> dict[str, Any]:
@@ -165,6 +186,7 @@ class InfluxDBSink:
         fields: dict[str, Any] = {
             "level": message.level,
             "active_fault_count": health.active_fault_count,
+            "boot_id": health.boot_id,
         }
         if message.msg:
             fields["message"] = message.msg
@@ -182,7 +204,6 @@ class InfluxDBSink:
                 "device_path": health.device_path,
                 "schema": health.schema_name,
                 "schema_version": str(health.schema_version),
-                "boot_id": health.boot_id,
             },
             "fields": fields,
             "time": sample_time_ns,
@@ -199,11 +220,12 @@ class InfluxDBSink:
             fields: dict[str, Any] = {
                 "active": fault.active,
                 "raise_count_total": fault.raise_count_total,
+                "boot_id": health.boot_id,
             }
             if fault.last_raised_ns is not None:
-                fields["last_raised_ns"] = fault.last_raised_ns
+                fields["last_raised_ms"] = _timestamp_ns_to_ms(fault.last_raised_ns)
             if fault.last_cleared_ns is not None:
-                fields["last_cleared_ns"] = fault.last_cleared_ns
+                fields["last_cleared_ms"] = _timestamp_ns_to_ms(fault.last_cleared_ns)
 
             points.append(
                 {
@@ -214,7 +236,76 @@ class InfluxDBSink:
                         "device_path": health.device_path,
                         "fault_code": fault.code,
                         "schema_version": str(health.schema_version),
-                        "boot_id": health.boot_id,
+                    },
+                    "fields": fields,
+                    "time": sample_time_ns,
+                }
+            )
+        return points
+
+    def _fault_occurrence_points(
+        self,
+        message: DiagnosticsMessage,
+        health: HealthStatus,
+        sample_time_ns: int,
+    ) -> list[dict[str, Any]]:
+        points: list[dict[str, Any]] = []
+        for fault in health.faults:
+            key: FaultCounterKey = (message.hw_id, message.node, fault.code)
+            previous = self._fault_counter_state.get(key)
+            self._fault_counter_state[key] = (
+                health.boot_id,
+                fault.raise_count_total,
+            )
+
+            if previous is None:
+                continue
+
+            previous_boot_id, previous_total = previous
+            if previous_boot_id != health.boot_id:
+                LOGGER.info(
+                    "Fault counter epoch changed for %s %s (%s -> %s); "
+                    "establishing new baseline",
+                    message.node,
+                    fault.code,
+                    previous_boot_id,
+                    health.boot_id,
+                )
+                continue
+
+            if fault.raise_count_total < previous_total:
+                LOGGER.warning(
+                    "Fault counter decreased within boot for %s %s: %d -> %d; "
+                    "establishing new baseline",
+                    message.node,
+                    fault.code,
+                    previous_total,
+                    fault.raise_count_total,
+                )
+                continue
+
+            occurrences = fault.raise_count_total - previous_total
+            if occurrences == 0:
+                continue
+
+            fields: dict[str, Any] = {
+                "occurrences": occurrences,
+                "counter_before": previous_total,
+                "counter_after": fault.raise_count_total,
+                "boot_id": health.boot_id,
+            }
+            if fault.last_raised_ns is not None:
+                fields["last_raised_ms"] = _timestamp_ns_to_ms(fault.last_raised_ns)
+
+            points.append(
+                {
+                    "measurement": _FAULT_OCCURRENCE_MEASUREMENT,
+                    "tags": {
+                        "hw_id": message.hw_id,
+                        "path": message.node,
+                        "device_path": health.device_path,
+                        "fault_code": fault.code,
+                        "schema_version": str(health.schema_version),
                     },
                     "fields": fields,
                     "time": sample_time_ns,
@@ -242,7 +333,7 @@ class InfluxDBSink:
             LOGGER.warning("InfluxDB write failed (%d points dropped): %s", len(points), exc)
 
     def close(self) -> None:
-        # Final flush on shutdown — ignore the rate limit.
+        # Final flush on shutdown - ignore the rate limit.
         if self._pending and self._enabled and self._write_api is not None:
             try:
                 self._write_api.write(bucket=self._bucket, org=self._org, record=self._pending)
@@ -250,6 +341,10 @@ class InfluxDBSink:
                 LOGGER.warning("InfluxDB final flush failed: %s", exc)
         if self._client is not None:
             self._client.close()
+
+
+def _timestamp_ns_to_ms(value: int) -> int:
+    return value // 1_000_000
 
 
 def _coerce_health_field(value: Any) -> Any:
