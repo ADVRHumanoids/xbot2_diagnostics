@@ -1,17 +1,12 @@
 # Device health diagnostic schema (draft v1)
 
 This document describes the provisional schema recognized by the Python diagnostics
-aggregator. It is intentionally narrow while the device-health contract is being
-reviewed.
+aggregator.
 
 ## Identification
 
 A diagnostic is treated as a device-health message when the final segment of its
-`DiagnosticStatus.name` / aggregator `node` is either:
-
-- `health`
-- `health_status`
-
+`DiagnosticStatus.name` / aggregator `node` is either `health` or `health_status`.
 The preceding path identifies the logical device. `hardware_id` must contain the
 non-empty physical device identifier.
 
@@ -39,7 +34,8 @@ All required values may arrive as JSON strings, as they do in ROS
 | `faults.last_cleared` | object: fault code to timestamp or null | Latest clear time |
 
 Timestamps may be non-negative Unix epoch seconds or timezone-aware ISO-8601
-strings. They are normalized to integer nanoseconds.
+strings. Internally they are normalized to nanoseconds. InfluxDB fields exposed to
+Grafana use Unix epoch milliseconds (`last_raised_ms`, `last_cleared_ms`).
 
 Optional non-contract key-value fields are retained on the `device_health` InfluxDB
 point. Scalar values remain scalar fields; structured values are serialized as
@@ -73,12 +69,12 @@ Tags:
 - `device_path`
 - `schema`
 - `schema_version`
-- `boot_id`
 
 Fields:
 
 - `level`
 - `active_fault_count`
+- `boot_id`
 - `message`, when non-empty
 - optional non-contract health values
 
@@ -95,27 +91,54 @@ Tags:
 - `device_path`
 - `fault_code`
 - `schema_version`
-- `boot_id`
 
 Fields:
 
 - `active`
 - `raise_count_total`
-- `last_raised_ns`, when known
-- `last_cleared_ns`, when known
+- `boot_id`
+- `last_raised_ms`, when known
+- `last_cleared_ms`, when known
 
 The point timestamp is the diagnostic source timestamp.
+
+### `fault_occurrence`
+
+A sparse point is written when a cumulative raise counter increases.
+
+Tags:
+
+- `hw_id`
+- `path`
+- `device_path`
+- `fault_code`
+- `schema_version`
+
+Fields:
+
+- `occurrences`: counter delta since the previous received sample
+- `counter_before`
+- `counter_after`
+- `boot_id`
+- `last_raised_ms`, when known
+
+The point timestamp is the current health diagnostic source timestamp. When the
+counter delta is greater than one, the exact timestamps of all raises are not known;
+`last_raised_ms` records the latest raise supplied by the producer.
+
+The first sample for a fault establishes a baseline. A changed `boot_id` also
+establishes a new baseline. A counter decrease within the same boot is logged as a
+warning and establishes a new baseline. None of these baseline cases emits a
+`fault_occurrence` point.
+
+`boot_id` is stored as an Influx field, not a tag, to avoid creating a new series on
+every reboot.
 
 ## Decisions still open
 
 1. Whether the canonical suffix should be only `/health_status`, only `/health`,
    or whether both aliases should remain supported.
-2. Whether `device.boot_id` is mandatory and whether counters are boot-scoped or
-   persisted for the lifetime of the device.
-3. Whether `boot_id` should be an InfluxDB tag. Keeping it as a tag simplifies
-   counter-epoch filtering but creates a new series for every device reboot.
-4. Whether per-fault timestamps should stay as integer nanosecond fields or be
-   represented differently for easier Grafana formatting.
-5. Whether optional device-specific health values should share the
-   `device_health` measurement or be written through the existing generic
-   diagnostic measurement.
+2. Whether `device.boot_id` remains mandatory and whether counters are boot-scoped
+   or persisted for the lifetime of the device.
+3. Whether optional device-specific health values should share the
+   `device_health` measurement or use the generic diagnostic measurement.
