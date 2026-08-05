@@ -128,7 +128,7 @@ class DiagnosticsAggregator:
 
     @property
     def fault_states(self) -> dict[Any, FaultState]:
-        """Return a snapshot of all known coded fault lifecycle states."""
+        """Return a snapshot of all known standardized fault-report states."""
         return dict(self._fault_tracker.states)
 
     @staticmethod
@@ -209,9 +209,12 @@ class DiagnosticsAggregator:
         self.state_cache[message.node] = message
         self._last_seen[message.node] = recv_time
         transitions = self._fault_tracker.update(message, recv_time)
+
+        # Transition-aware sinks update their per-source summary before the
+        # corresponding /health snapshot is serialized.
+        self._publish_fault_updates(transitions)
         for sink in self._sinks:
             sink.handle_message(message)
-        self._publish_fault_updates(transitions)
         self._publish_state()
         return True
 
