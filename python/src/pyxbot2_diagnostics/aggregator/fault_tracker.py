@@ -1,4 +1,4 @@
-"""Fault lifecycle tracking for normalized diagnostics messages."""
+"""Fault lifecycle tracking for normalized health diagnostics messages."""
 
 from __future__ import annotations
 
@@ -7,14 +7,19 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 
-_SINGLE_CODE_KEYS = {"fault_code", "error_code"}
-_MULTI_CODE_KEYS = {
-    "fault_codes",
+# Fault lifecycle contract:
+# - only diagnostic paths ending in /health are considered;
+# - fault_codes is the canonical required value key;
+# - an empty fault_codes collection means that all previous faults are cleared;
+# - levels 1/2 describe active faults, level 0 describes no active faults;
+# - level 3 is transport staleness and must not change hardware fault state.
+_CANONICAL_CODE_KEY = "fault_codes"
+_LEGACY_SINGLE_CODE_KEYS = {"fault_code", "error_code"}
+_LEGACY_MULTI_CODE_KEYS = {
     "error_codes",
     "active_fault_codes",
     "active_error_codes",
 }
-_ACTIVE_KEYS = {"fault_active", "error_active"}
 
 
 @dataclass(frozen=True)
@@ -50,13 +55,16 @@ class FaultTransition:
 
 
 class FaultLifecycleTracker:
-    """Track raise/clear transitions for diagnostic error codes.
+    """Track coded faults published through the health-message contract.
 
-    The tracker recognizes the value keys ``fault_code`` and ``error_code`` for
-    a single code, and their plural/``active_*`` variants for multiple active
-    codes. Diagnostic levels 1 and 2 imply active faults, level 0 clears the
-    current source faults, and level 3 (STALE) deliberately leaves hardware
-    fault state unchanged.
+    Canonical publishers use a node path ending in ``/health`` and include one
+    ``fault_codes`` value. Its value is the complete set of faults active at the
+    message timestamp. An empty collection clears faults previously reported by
+    that health source.
+
+    ``fault_code``, ``error_code``, ``error_codes``, ``active_fault_codes`` and
+    ``active_error_codes`` are accepted as compatibility aliases, but new
+    publishers should only emit ``fault_codes``.
     """
 
     def __init__(self) -> None:
@@ -64,24 +72,25 @@ class FaultLifecycleTracker:
         self._active_by_source: dict[tuple[str, str], set[str]] = {}
 
     def update(self, message: Any, recv_time: float) -> list[FaultTransition]:
-        """Consume one normalized diagnostics message and return transitions."""
-        if message.level == 3:
+        """Consume one normalized message and return fault transitions."""
+        if not self._is_health_node(message.node) or message.level == 3:
+            return []
+
+        codes, has_code_key = self._extract_codes(message.values)
+        if not has_code_key:
+            # A /health message without the required code set is malformed for
+            # lifecycle purposes. Ignoring it is safer than clearing state.
             return []
 
         source = (message.hw_id or "unknown", message.node)
-        codes, explicit_active = self._extract_codes(message.values)
         previous_codes = set(self._active_by_source.get(source, set()))
+        current_codes = codes
 
-        if explicit_active is False or message.level == 0:
-            current_codes: set[str] = set()
-        elif explicit_active is True or message.level in (1, 2):
-            current_codes = codes
-        else:
-            current_codes = previous_codes
-
-        # Messages without a recognizable code cannot create a stable fault
-        # identity. They can still clear previously active coded faults on OK.
-        if not codes and message.level in (1, 2):
+        # fault_codes is the source of truth. Level conveys severity only.
+        # Inconsistent messages are ignored to avoid false raises or clears.
+        if current_codes and message.level not in (1, 2):
+            return []
+        if not current_codes and message.level != 0:
             return []
 
         stamp = self._event_stamp(message.stamp, recv_time)
@@ -106,18 +115,15 @@ class FaultLifecycleTracker:
         for code in sorted(current_codes - previous_codes):
             key = FaultKey(source[0], source[1], code)
             previous = self.states.get(key)
-            count = 1 if previous is None else previous.occurrence_count + 1
-            first_raised = stamp if previous is None else previous.first_raised
-            last_cleared = None if previous is None else previous.last_cleared
             state = FaultState(
                 key=key,
                 active=True,
                 level=message.level,
                 message=message.msg,
-                first_raised=first_raised,
+                first_raised=stamp if previous is None else previous.first_raised,
                 last_raised=stamp,
-                last_cleared=last_cleared,
-                occurrence_count=count,
+                last_cleared=None if previous is None else previous.last_cleared,
+                occurrence_count=1 if previous is None else previous.occurrence_count + 1,
             )
             self.states[key] = state
             transitions.append(FaultTransition("raised", state, stamp))
@@ -140,6 +146,11 @@ class FaultLifecycleTracker:
         return transitions
 
     @staticmethod
+    def _is_health_node(node: Any) -> bool:
+        parts = [part for part in str(node).split("/") if part]
+        return bool(parts) and parts[-1].lower() == "health"
+
+    @staticmethod
     def _event_stamp(source_stamp: Any, recv_time: float) -> float:
         try:
             stamp = float(source_stamp)
@@ -148,26 +159,26 @@ class FaultLifecycleTracker:
         return stamp if math.isfinite(stamp) and stamp > 0.0 else recv_time
 
     @classmethod
-    def _extract_codes(cls, values: Iterable[Any]) -> tuple[set[str], bool | None]:
+    def _extract_codes(cls, values: Iterable[Any]) -> tuple[set[str], bool]:
         codes: set[str] = set()
-        explicit_active: bool | None = None
+        has_code_key = False
 
         for item in values:
             key = str(item.key).strip().lower()
             value = item.value
-            if key in _SINGLE_CODE_KEYS:
-                code = cls._normalize_code(value)
-                if code is not None:
-                    codes.add(code)
-            elif key in _MULTI_CODE_KEYS:
+            if key == _CANONICAL_CODE_KEY or key in _LEGACY_MULTI_CODE_KEYS:
+                has_code_key = True
                 for raw_code in cls._iter_codes(value):
                     code = cls._normalize_code(raw_code)
                     if code is not None:
                         codes.add(code)
-            elif key in _ACTIVE_KEYS:
-                explicit_active = cls._as_bool(value)
+            elif key in _LEGACY_SINGLE_CODE_KEYS:
+                has_code_key = True
+                code = cls._normalize_code(value)
+                if code is not None:
+                    codes.add(code)
 
-        return codes, explicit_active
+        return codes, has_code_key
 
     @staticmethod
     def _iter_codes(value: Any) -> Iterable[Any]:
@@ -182,14 +193,10 @@ class FaultLifecycleTracker:
         if value is None or isinstance(value, bool):
             return None
         if isinstance(value, int):
-            if value == 0:
-                return None
-            return f"0x{value:X}"
+            return None if value == 0 else f"0x{value:X}"
         if isinstance(value, float) and value.is_integer():
             integer = int(value)
-            if integer == 0:
-                return None
-            return f"0x{integer:X}"
+            return None if integer == 0 else f"0x{integer:X}"
 
         text = str(value).strip()
         if not text or text.lower() in {"0", "0x0", "0x0000", "none", "ok"}:
@@ -200,17 +207,3 @@ class FaultLifecycleTracker:
             except ValueError:
                 pass
         return text
-
-    @staticmethod
-    def _as_bool(value: Any) -> bool | None:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)):
-            return bool(value)
-        if isinstance(value, str):
-            normalized = value.strip().lower()
-            if normalized in {"true", "yes", "on", "1"}:
-                return True
-            if normalized in {"false", "no", "off", "0"}:
-                return False
-        return None
