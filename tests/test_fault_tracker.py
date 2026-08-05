@@ -21,10 +21,11 @@ def _message(
     values: tuple[DiagnosticKeyValue, ...],
     stamp: float = 10.0,
     msg: str = "fault",
+    node: str = "/xbot/joint/knee_pitch_1/health",
 ) -> DiagnosticsMessage:
     return DiagnosticsMessage(
         v=1,
-        node="xbot/joint/knee_pitch_1/drive_fault",
+        node=node,
         hw_id="knee_pitch_1",
         stamp=stamp,
         level=level,
@@ -37,7 +38,7 @@ def test_single_fault_raise_duplicate_and_clear() -> None:
     tracker = FaultLifecycleTracker()
     fault = _message(
         level=2,
-        values=(DiagnosticKeyValue("error_code", "0x4210"),),
+        values=(DiagnosticKeyValue("fault_codes", ["0x4210"]),),
     )
 
     transitions = tracker.update(fault, recv_time=11.0)
@@ -52,7 +53,13 @@ def test_single_fault_raise_duplicate_and_clear() -> None:
     assert next(iter(tracker.states.values())).occurrence_count == 1
 
     cleared = tracker.update(
-        _message(level=0, values=(), stamp=20.0, msg="OK"), recv_time=21.0
+        _message(
+            level=0,
+            values=(DiagnosticKeyValue("fault_codes", []),),
+            stamp=20.0,
+            msg="OK",
+        ),
+        recv_time=21.0,
     )
     assert [item.kind for item in cleared] == ["cleared"]
     assert not cleared[0].state.active
@@ -62,7 +69,7 @@ def test_single_fault_raise_duplicate_and_clear() -> None:
 def test_code_change_clears_old_and_raises_new() -> None:
     tracker = FaultLifecycleTracker()
     tracker.update(
-        _message(level=2, values=(DiagnosticKeyValue("fault_code", "0x4210"),)),
+        _message(level=2, values=(DiagnosticKeyValue("fault_codes", ["0x4210"]),)),
         recv_time=10.0,
     )
 
@@ -70,7 +77,7 @@ def test_code_change_clears_old_and_raises_new() -> None:
         _message(
             level=2,
             stamp=30.0,
-            values=(DiagnosticKeyValue("fault_code", "0x7500"),),
+            values=(DiagnosticKeyValue("fault_codes", ["0x7500"]),),
         ),
         recv_time=31.0,
     )
@@ -86,7 +93,7 @@ def test_multiple_simultaneous_faults_are_diffed_as_sets() -> None:
     first = tracker.update(
         _message(
             level=2,
-            values=(DiagnosticKeyValue("active_error_codes", [0x4210, "0x7500"]),),
+            values=(DiagnosticKeyValue("fault_codes", [0x4210, "0x7500"]),),
         ),
         recv_time=10.0,
     )
@@ -99,7 +106,7 @@ def test_multiple_simultaneous_faults_are_diffed_as_sets() -> None:
         _message(
             level=2,
             stamp=40.0,
-            values=(DiagnosticKeyValue("active_error_codes", ["0x7500", "0x8611"]),),
+            values=(DiagnosticKeyValue("fault_codes", ["0x7500", "0x8611"]),),
         ),
         recv_time=41.0,
     )
@@ -112,7 +119,7 @@ def test_multiple_simultaneous_faults_are_diffed_as_sets() -> None:
 def test_stale_does_not_clear_hardware_faults() -> None:
     tracker = FaultLifecycleTracker()
     tracker.update(
-        _message(level=2, values=(DiagnosticKeyValue("error_code", "0x4210"),)),
+        _message(level=2, values=(DiagnosticKeyValue("fault_codes", ["0x4210"]),)),
         recv_time=10.0,
     )
 
@@ -121,11 +128,48 @@ def test_stale_does_not_clear_hardware_faults() -> None:
             level=3,
             stamp=50.0,
             msg="STALE",
-            values=(DiagnosticKeyValue("error_code", "0x4210"),),
+            values=(DiagnosticKeyValue("fault_codes", ["0x4210"]),),
         ),
         recv_time=50.0,
     ) == []
     assert next(iter(tracker.states.values())).active
+
+
+def test_non_health_message_is_not_interpreted_as_fault_contract() -> None:
+    tracker = FaultLifecycleTracker()
+    transitions = tracker.update(
+        _message(
+            level=2,
+            node="/xbot/joint/knee_pitch_1/temperature",
+            values=(DiagnosticKeyValue("fault_codes", ["0x4210"]),),
+        ),
+        recv_time=10.0,
+    )
+    assert transitions == []
+    assert tracker.states == {}
+
+
+def test_health_message_requires_fault_codes_key() -> None:
+    tracker = FaultLifecycleTracker()
+    transitions = tracker.update(
+        _message(level=2, values=(DiagnosticKeyValue("temperature", 90.0),)),
+        recv_time=10.0,
+    )
+    assert transitions == []
+    assert tracker.states == {}
+
+
+def test_inconsistent_level_and_fault_codes_is_ignored() -> None:
+    tracker = FaultLifecycleTracker()
+    assert tracker.update(
+        _message(level=0, values=(DiagnosticKeyValue("fault_codes", ["0x4210"]),)),
+        recv_time=10.0,
+    ) == []
+    assert tracker.update(
+        _message(level=2, values=(DiagnosticKeyValue("fault_codes", []),)),
+        recv_time=10.0,
+    ) == []
+    assert tracker.states == {}
 
 
 class NullSource:
@@ -169,7 +213,7 @@ def test_aggregator_publishes_fault_transitions_to_opt_in_sink() -> None:
     aggregator = DiagnosticsAggregator(config, [sink], sources=[NullSource()])
 
     aggregator.process_message(
-        _message(level=2, values=(DiagnosticKeyValue("error_code", "0x4210"),)),
+        _message(level=2, values=(DiagnosticKeyValue("fault_codes", ["0x4210"]),)),
         now=11.0,
     )
 
