@@ -2,98 +2,123 @@
 
 The aggregator interprets a diagnostic message as a fault-state source only when its normalized `node` path ends in `/health`.
 
-Examples of health-source paths:
+Examples:
 
 - `/xbot/joint/knee_pitch_1/health`
 - `/xbot/power/battery/health`
 - `host/robot-pc/network/eth0/health`
 
-Messages with other suffixes remain ordinary diagnostics and are not inspected for fault lifecycle information, even if they contain similarly named values.
+Messages with other suffixes remain ordinary diagnostics even if they contain similarly named values.
 
-## Required values
+## ROS string-native values
 
-Every `/health` message must contain exactly one canonical key-value entry named `fault_codes`.
+`diagnostic_msgs/KeyValue.value` is a string. A valid `/health` message therefore contains:
 
-```json
-{"key": "fault_codes", "value": ["0x4210", "0x7500"]}
+- exactly one `fault_count` entry containing a non-negative decimal integer;
+- zero or more repeated `fault_report` entries;
+- `fault_count` equal to the number of unique `fault_report` values.
+
+Each `fault_report` is a standardized, stable, human-friendly identifier. It must not contain changing measurements, timestamps, counters, or other occurrence-specific text.
+
+Active example:
+
+```yaml
+name: /xbot/joint/knee_pitch_1/health
+hardware_id: knee_pitch_1
+level: 2
+message: Drive faults active
+values:
+  - key: fault_count
+    value: "2"
+  - key: fault_report
+    value: motor over temperature
+  - key: fault_report
+    value: encoder signal lost
 ```
 
-`fault_codes` is the complete set of fault codes active for that health source at the message timestamp. It is not a delta and must not contain only newly raised faults.
+Healthy example:
 
-The value should be an array. Each code may be an integer or a stable string identifier. Integer codes and hexadecimal strings are normalized to uppercase hexadecimal strings by the aggregator. Zero-like values (`0`, `0x0000`, `none`, `ok`) are ignored and must not be used as real fault identifiers.
-
-An empty array explicitly means that the source has no active faults:
-
-```json
-{"key": "fault_codes", "value": []}
+```yaml
+name: /xbot/joint/knee_pitch_1/health
+hardware_id: knee_pitch_1
+level: 0
+message: OK
+values:
+  - key: fault_count
+    value: "0"
 ```
 
-A `/health` message without `fault_codes` is invalid for lifecycle tracking and is ignored. It does not clear previously active faults.
+The reports are the complete currently active set, not deltas. XBot2 should publish immediately when the set, severity, or summary changes and should also publish a periodic heartbeat, with 1 Hz as the default recommendation.
 
-## Level and message semantics
+## Level semantics
 
-The ROS diagnostics level must agree with `fault_codes`:
-
-| `fault_codes` | `level` | Meaning |
+| Reports | `level` | Meaning |
 |---|---:|---|
-| empty | `0` | Healthy; clear all faults previously reported by this source |
-| non-empty | `1` | One or more warning-level faults are active |
-| non-empty | `2` | One or more error-level faults are active |
-| unchanged/any | `3` | Source is stale; do not raise or clear hardware faults |
+| none | `0` | Healthy; clear all faults previously reported by this source |
+| one or more | `1` | Warning-level reports active |
+| one or more | `2` | Error-level reports active |
+| unchanged/any | `3` | Source stale; do not raise or clear hardware faults |
 
-Inconsistent combinations, such as non-empty `fault_codes` with level `0`, are ignored for lifecycle tracking.
+Messages missing `fault_count`, containing duplicate count entries, having an inconsistent count, or having an inconsistent level/report combination are ignored for lifecycle tracking. Ignoring malformed data is safer than clearing an existing fault.
 
-`msg` is a human-readable summary for dashboards and logs. It is not part of fault identity and must not be parsed to determine active faults.
+`msg` is dashboard summary text and is not part of fault identity. Dynamic measurements and vendor codes may be supplied as additional key-value entries.
 
-`hw_id` identifies the physical device. A fault lifecycle is keyed by:
+The lifecycle identity is:
 
 ```text
-(hw_id, node, fault_code)
+(hw_id, node, fault_report)
 ```
 
-## Examples
+## InfluxDB schema
 
-Active faults:
+Every valid health publication, including the heartbeat, produces one `health` point.
 
-```json
-{
-  "v": 1,
-  "node": "/xbot/joint/knee_pitch_1/health",
-  "hw_id": "knee_pitch_1",
-  "stamp": 1785967012.0,
-  "level": 2,
-  "msg": "Drive reports over-temperature and communication faults",
-  "values": [
-    {"key": "fault_codes", "value": ["0x4210", "0x7500"]}
-  ]
-}
-```
+Tags:
 
-Healthy/cleared:
+- `hw_id`
+- `path`
+- `name`
+- `component`
 
-```json
-{
-  "v": 1,
-  "node": "/xbot/joint/knee_pitch_1/health",
-  "hw_id": "knee_pitch_1",
-  "stamp": 1785967305.0,
-  "level": 0,
-  "msg": "OK",
-  "values": [
-    {"key": "fault_codes", "value": []}
-  ]
-}
-```
+Fields:
 
-## Compatibility aliases
+- `level`
+- `message`
+- `fault_count`
+- `active_fault_reports` (sorted reports joined for display)
+- `last_fault_report`, when known
+- `last_fault_active`, when known
+- `last_fault_level`, when known
+- `last_raised_ns`, when known
+- `last_cleared_ns`, when known
 
-For migration, the tracker currently accepts these aliases:
+This gives Grafana one current row per health source using a latest-point query.
 
-- single-code aliases: `fault_code`, `error_code`
-- multi-code aliases: `error_codes`, `active_fault_codes`, `active_error_codes`
+Each raise or clear produces one `fault_event` point.
 
-New publishers must use `fault_codes`. Compatibility aliases may be removed in a future schema version.
+Tags:
+
+- `hw_id`
+- `path`
+- `name`
+- `component`
+- `fault_report`
+- `transition` (`raised` or `cleared`)
+
+Fields:
+
+- `active`
+- `level`
+- `message`
+- `occurrence_count`
+- `first_raised_ns`
+- `last_raised_ns`
+- `last_cleared_ns`, when available
+
+`fault_report` is deliberately a tag because reports are standardized and bounded, giving the same cardinality characteristics as standardized numeric fault codes while making Grafana filtering and grouping directly human-readable.
+
+Both health and event points use the diagnostic source timestamp when valid, falling back to aggregator wall-clock time only when necessary.
 
 ## Design rationale
 
-The path suffix provides an explicit namespace boundary so arbitrary telemetry cannot accidentally create or clear faults. A complete active-code set makes updates idempotent and allows the aggregator to compute raises and clears by set difference. It also supports devices that report one current code and devices that report multiple simultaneous codes without changing the storage model.
+The `/health` suffix creates an explicit namespace boundary. Repeated `fault_report` entries are native to ROS string key-values and avoid JSON embedded inside strings. An explicit `fault_count` distinguishes a healthy authoritative snapshot from a publisher that omitted the contract. Complete-set publication is idempotent and lets the aggregator derive raises and clears through set differences. Periodic `health` snapshots make the primary Grafana table robust to packet loss, subscriber startup order, and aggregator restarts, while `fault_event` points retain transition history without writing duplicate events on every heartbeat.
