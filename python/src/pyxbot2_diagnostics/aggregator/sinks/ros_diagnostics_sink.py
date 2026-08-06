@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -93,11 +94,24 @@ class RosDiagnosticsSink:
         }.get(level, "UNKNOWN")
 
     @classmethod
-    def _to_group_status(cls, name: str, level: int) -> RosDiagnosticStatus:
+    def _child_level_summary(cls, child_levels: list[int]) -> str:
+        """Summarize non-OK immediate children in deterministic severity order."""
+        counts = Counter(child_levels)
+        parts = [
+            f"{counts[level]} {cls._level_message(level)}"
+            for level in (1, 2, 3)
+            if counts[level]
+        ]
+        return ", ".join(parts) if parts else "OK"
+
+    @classmethod
+    def _to_group_status(
+        cls, name: str, level: int, child_levels: list[int]
+    ) -> RosDiagnosticStatus:
         return RosDiagnosticStatus(
             level=cls._to_level(level),
             name=name,
-            message=cls._level_message(level),
+            message=cls._child_level_summary(child_levels),
             hardware_id="",
             values=[],
         )
@@ -118,6 +132,13 @@ class RosDiagnosticsSink:
     def _aggregate_path(segments: list[str], length: int) -> str:
         return "/" + "/".join(segments[:length])
 
+    @staticmethod
+    def _parent_path(path: str) -> str | None:
+        parent, separator, _ = path.rpartition("/")
+        if not separator or not parent:
+            return None
+        return parent
+
     def _build_aggregated_statuses(
         self, states: dict[str, DiagnosticsMessage]
     ) -> list[RosDiagnosticStatus]:
@@ -132,9 +153,22 @@ class RosDiagnosticsSink:
                 path = self._aggregate_path(segments, length)
                 group_levels[path] = max(group_levels.get(path, 0), msg.level)
 
+        immediate_child_levels: dict[str, list[int]] = {}
+        for path, level in group_levels.items():
+            parent = self._parent_path(path)
+            if parent is not None and parent in group_levels:
+                immediate_child_levels.setdefault(parent, []).append(level)
+
         statuses: list[RosDiagnosticStatus] = []
         for path in sorted(group_levels):
-            statuses.append(leaf_statuses.get(path) or self._to_group_status(path, group_levels[path]))
+            statuses.append(
+                leaf_statuses.get(path)
+                or self._to_group_status(
+                    path,
+                    group_levels[path],
+                    immediate_child_levels.get(path, []),
+                )
+            )
         return statuses
 
     def handle_message(self, message: DiagnosticsMessage) -> None:

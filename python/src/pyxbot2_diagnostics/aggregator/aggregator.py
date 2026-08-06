@@ -14,6 +14,11 @@ import zmq
 from jsonschema import ValidationError, validate
 
 from pyxbot2_diagnostics.aggregator.config import AggregatorConfig
+from pyxbot2_diagnostics.aggregator.fault_tracker import (
+    FaultLifecycleTracker,
+    FaultState,
+    FaultTransition,
+)
 
 LOGGER = logging.getLogger(__name__)
 MESSAGE_SCHEMA_PATH = Path(__file__).resolve().parent / "schema" / "diagnostics_message.schema.json"
@@ -116,9 +121,15 @@ class DiagnosticsAggregator:
 
         self.state_cache: dict[str, DiagnosticsMessage] = {}
         self._last_seen: dict[str, float] = {}
+        self._fault_tracker = FaultLifecycleTracker()
 
         self._running = False
         self._last_stale_check = self._time_fn()
+
+    @property
+    def fault_states(self) -> dict[Any, FaultState]:
+        """Return a snapshot of all known standardized fault-report states."""
+        return dict(self._fault_tracker.states)
 
     @staticmethod
     def validate_and_normalize_message(raw: Any) -> DiagnosticsMessage:
@@ -183,11 +194,25 @@ class DiagnosticsAggregator:
         for sink in self._sinks:
             sink.publish_state(snapshot)
 
+    def _publish_fault_updates(self, transitions: list[FaultTransition]) -> None:
+        if not transitions:
+            return
+        states = dict(self._fault_tracker.states)
+        for sink in self._sinks:
+            handler = getattr(sink, "handle_fault_transitions", None)
+            if callable(handler):
+                handler(transitions, states)
+
     def process_message(self, message: DiagnosticsMessage, now: float | None = None) -> bool:
         """Process one normalized diagnostics message."""
         recv_time = now if now is not None else self._time_fn()
         self.state_cache[message.node] = message
         self._last_seen[message.node] = recv_time
+        transitions = self._fault_tracker.update(message, recv_time)
+
+        # Transition-aware sinks update their per-source summary before the
+        # corresponding /fault snapshot is serialized.
+        self._publish_fault_updates(transitions)
         for sink in self._sinks:
             sink.handle_message(message)
         self._publish_state()

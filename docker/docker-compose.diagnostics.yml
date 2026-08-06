@@ -19,7 +19,7 @@ services:
       - influxdb-config:/etc/influxdb2
 
   grafana:
-    image: grafana/grafana:10.4.12
+    image: grafana/grafana:13.1
     container_name: xbot2-diagnostics-grafana
     restart: unless-stopped
     depends_on:
