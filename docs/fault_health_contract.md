@@ -1,29 +1,34 @@
-# Fault health diagnostic contract
+# Fault diagnostic contract
 
-The aggregator interprets a diagnostic message as a fault-state source only when its normalized `node` path ends in `/health`.
+The aggregator interprets a diagnostic message as a fault-state source only when its normalized `node` path ends in `/fault`.
 
 Examples:
 
-- `/xbot/joint/knee_pitch_1/health`
-- `/xbot/power/battery/health`
-- `host/robot-pc/network/eth0/health`
+- `/xbot/joint/knee_pitch_1/fault`
+- `/xbot/power/battery/fault`
+- `host/robot-pc/network/eth0/fault`
 
 Messages with other suffixes remain ordinary diagnostics even if they contain similarly named values.
 
 ## ROS string-native values
 
-`diagnostic_msgs/KeyValue.value` is a string. A valid `/health` message therefore contains:
+`diagnostic_msgs/KeyValue.value` is a string. A valid `/fault` message therefore contains:
 
-- exactly one `fault_count` entry containing a non-negative decimal integer;
+- exactly one `fault_count` entry containing a non-negative whole number. The
+  ROS bridge form `"1.000000"` is also accepted;
 - zero or more repeated `fault_report` entries;
 - `fault_count` equal to the number of unique `fault_report` values.
+
+An empty `fault_report` value is treated as an omitted report for compatibility
+with fixed-size publisher slots. It is therefore valid only together with a
+zero `fault_count`.
 
 Each `fault_report` is a standardized, stable, human-friendly identifier. It must not contain changing measurements, timestamps, counters, or other occurrence-specific text.
 
 Active example:
 
 ```yaml
-name: /xbot/joint/knee_pitch_1/health
+name: /xbot/joint/knee_pitch_1/fault
 hardware_id: knee_pitch_1
 level: 2
 message: Drive faults active
@@ -39,7 +44,7 @@ values:
 Healthy example:
 
 ```yaml
-name: /xbot/joint/knee_pitch_1/health
+name: /xbot/joint/knee_pitch_1/fault
 hardware_id: knee_pitch_1
 level: 0
 message: OK
@@ -71,7 +76,7 @@ The lifecycle identity is:
 
 ## InfluxDB schema
 
-Every valid health publication, including the heartbeat, produces one `health` point.
+Every valid fault publication, including the heartbeat, produces one `fault` point.
 
 Tags:
 
@@ -92,7 +97,7 @@ Fields:
 - `last_raised_ns`, when known
 - `last_cleared_ns`, when known
 
-This gives Grafana one current row per health source using a latest-point query.
+This gives Grafana one current row per fault source using a latest-point query.
 
 Each raise or clear produces one `fault_event` point.
 
@@ -117,8 +122,8 @@ Fields:
 
 `fault_report` is deliberately a tag because reports are standardized and bounded, giving the same cardinality characteristics as standardized numeric fault codes while making Grafana filtering and grouping directly human-readable.
 
-Both health and event points use the diagnostic source timestamp when valid, falling back to aggregator wall-clock time only when necessary.
+Both fault and event points use the diagnostic source timestamp when valid, falling back to aggregator wall-clock time only when necessary.
 
 ## Design rationale
 
-The `/health` suffix creates an explicit namespace boundary. Repeated `fault_report` entries are native to ROS string key-values and avoid JSON embedded inside strings. An explicit `fault_count` distinguishes a healthy authoritative snapshot from a publisher that omitted the contract. Complete-set publication is idempotent and lets the aggregator derive raises and clears through set differences. Periodic `health` snapshots make the primary Grafana table robust to packet loss, subscriber startup order, and aggregator restarts, while `fault_event` points retain transition history without writing duplicate events on every heartbeat.
+The `/fault` suffix creates an explicit namespace boundary. Repeated `fault_report` entries are native to ROS string key-values and avoid JSON embedded inside strings. An explicit `fault_count` distinguishes a healthy authoritative snapshot from a publisher that omitted the contract. Complete-set publication is idempotent and lets the aggregator derive raises and clears through set differences. Periodic `fault` snapshots make the primary Grafana table robust to packet loss, subscriber startup order, and aggregator restarts, while `fault_event` points retain transition history without writing duplicate events on every heartbeat.

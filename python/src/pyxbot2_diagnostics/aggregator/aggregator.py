@@ -211,7 +211,7 @@ class DiagnosticsAggregator:
         transitions = self._fault_tracker.update(message, recv_time)
 
         # Transition-aware sinks update their per-source summary before the
-        # corresponding /health snapshot is serialized.
+        # corresponding /fault snapshot is serialized.
         self._publish_fault_updates(transitions)
         for sink in self._sinks:
             sink.handle_message(message)

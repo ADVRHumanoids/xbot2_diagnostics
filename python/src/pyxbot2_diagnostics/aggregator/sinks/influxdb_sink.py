@@ -1,4 +1,4 @@
-"""InfluxDB sink for diagnostics, health snapshots, and fault events."""
+"""InfluxDB sink for diagnostics, fault snapshots, and fault events."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ import logging
 import math
 import time
 from typing import Any
+
+from pyxbot2_diagnostics.aggregator.fault_tracker import parse_fault_count
 
 from pyxbot2_diagnostics.aggregator.aggregator import DiagnosticsMessage
 
@@ -18,8 +20,8 @@ class InfluxDBSink:
 
     Ordinary diagnostics keep the existing path-derived measurement schema.
 
-    Health messages (paths ending in ``/health``) are written as one periodic
-    ``health`` snapshot per source. Fault transitions are written separately as
+    Fault messages (paths ending in ``/fault``) are written as one periodic
+    ``fault`` snapshot per source. Fault transitions are written separately as
     ``fault_event`` points. Standardized ``fault_report`` values are tags so
     Grafana can filter and group by report efficiently.
     """
@@ -83,11 +85,11 @@ class InfluxDBSink:
             "component": component,
         }
 
-        if measurement.lower() == "health":
-            fields = self._health_fields(message)
+        if measurement.lower() == "fault":
+            fields = self._fault_fields(message)
             if fields is None:
                 # Preserve ordinary diagnostics export while avoiding a
-                # misleading lifecycle snapshot for malformed health data.
+                # misleading lifecycle snapshot for malformed fault data.
                 fields = self._generic_fields(message)
         else:
             fields = self._generic_fields(message)
@@ -112,7 +114,7 @@ class InfluxDBSink:
             self._last_fault_by_source[source] = state
 
             parts = [part for part in state.key.node.split("/") if part]
-            name = parts[-2] if len(parts) >= 2 else "health"
+            name = parts[-2] if len(parts) >= 2 else "fault"
             component = "/".join(parts[:-2])
             fields: dict[str, Any] = {
                 "active": state.active,
@@ -141,7 +143,7 @@ class InfluxDBSink:
                 }
             )
 
-    def _health_fields(self, message: DiagnosticsMessage) -> dict[str, Any] | None:
+    def _fault_fields(self, message: DiagnosticsMessage) -> dict[str, Any] | None:
         reports: list[str] = []
         counts: list[int] = []
         fields: dict[str, Any] = {"level": message.level}
@@ -153,10 +155,10 @@ class InfluxDBSink:
                 if report:
                     reports.append(report)
             elif key == "fault_count":
-                try:
-                    counts.append(int(str(kv.value).strip(), 10))
-                except ValueError:
+                count = parse_fault_count(kv.value)
+                if count is None:
                     return None
+                counts.append(count)
             else:
                 self._add_generic_field(fields, kv.key, kv.value)
 

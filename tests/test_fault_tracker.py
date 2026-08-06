@@ -29,7 +29,7 @@ def _message(
     values: tuple[DiagnosticKeyValue, ...],
     stamp: float = 10.0,
     msg: str = "fault",
-    node: str = "/xbot/joint/knee_pitch_1/health",
+    node: str = "/xbot/joint/knee_pitch_1/fault",
 ) -> DiagnosticsMessage:
     return DiagnosticsMessage(
         v=1,
@@ -135,7 +135,7 @@ def test_stale_does_not_clear_hardware_faults() -> None:
     assert next(iter(tracker.states.values())).active
 
 
-def test_non_health_message_is_not_interpreted_as_fault_contract() -> None:
+def test_non_fault_message_is_not_interpreted_as_fault_contract() -> None:
     tracker = FaultLifecycleTracker()
     transitions = tracker.update(
         _message(
@@ -149,7 +149,21 @@ def test_non_health_message_is_not_interpreted_as_fault_contract() -> None:
     assert tracker.states == {}
 
 
-def test_health_message_requires_exactly_one_fault_count() -> None:
+def test_legacy_health_message_is_not_interpreted_as_fault_contract() -> None:
+    tracker = FaultLifecycleTracker()
+    transitions = tracker.update(
+        _message(
+            level=2,
+            node="/xbot/joint/knee_pitch_1/health",
+            values=_values("motor over temperature"),
+        ),
+        recv_time=10.0,
+    )
+    assert transitions == []
+    assert tracker.states == {}
+
+
+def test_fault_message_requires_exactly_one_fault_count() -> None:
     tracker = FaultLifecycleTracker()
     missing = _message(
         level=2,
@@ -175,6 +189,47 @@ def test_fault_count_must_match_unique_reports() -> None:
         recv_time=10.0,
     ) == []
     assert tracker.states == {}
+
+
+def test_ros_double_formatted_whole_count_and_empty_clear_report_are_accepted() -> None:
+    tracker = FaultLifecycleTracker()
+    raised = tracker.update(
+        _message(
+            level=2,
+            values=(
+                DiagnosticKeyValue("fault_count", "1.000000"),
+                DiagnosticKeyValue("fault_report", "motor over temperature"),
+            ),
+        ),
+        recv_time=10.0,
+    )
+    assert [item.kind for item in raised] == ["raised"]
+
+    cleared = tracker.update(
+        _message(
+            level=0,
+            values=(
+                DiagnosticKeyValue("fault_count", "0.000000"),
+                DiagnosticKeyValue("fault_report", ""),
+            ),
+        ),
+        recv_time=11.0,
+    )
+    assert [item.kind for item in cleared] == ["cleared"]
+
+
+def test_fractional_fault_count_is_rejected() -> None:
+    tracker = FaultLifecycleTracker()
+    assert tracker.update(
+        _message(
+            level=2,
+            values=(
+                DiagnosticKeyValue("fault_count", "1.5"),
+                DiagnosticKeyValue("fault_report", "motor over temperature"),
+            ),
+        ),
+        recv_time=10.0,
+    ) == []
 
 
 def test_inconsistent_level_and_reports_is_ignored() -> None:
@@ -221,7 +276,7 @@ class FaultSink:
         return
 
 
-def test_aggregator_publishes_transitions_before_health_snapshot() -> None:
+def test_aggregator_publishes_transitions_before_fault_snapshot() -> None:
     config = AggregatorConfig(
         aggregator=AggregatorSection(
             zmq_endpoint="inproc://unused",

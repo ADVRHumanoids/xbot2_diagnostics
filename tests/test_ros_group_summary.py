@@ -78,8 +78,8 @@ def test_leaf_message_is_preserved() -> None:
         time_fn=lambda: 1.0,
     )
     sink.publish_state(
-        {"/xbot/drive/health": _msg("/xbot/drive/health", 2, "Drive fault")}
+        {"/xbot/drive/fault": _msg("/xbot/drive/fault", 2, "Drive fault")}
     )
 
     statuses = {status.name: status for status in published[0].status}
-    assert statuses["/Robot/xbot/drive/health"].message == "Drive fault"
+    assert statuses["/Robot/xbot/drive/fault"].message == "Drive fault"

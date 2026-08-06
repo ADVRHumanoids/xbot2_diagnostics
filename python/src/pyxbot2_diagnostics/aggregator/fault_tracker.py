@@ -1,10 +1,28 @@
-"""Fault lifecycle tracking for normalized health diagnostics messages."""
+"""Fault lifecycle tracking for normalized fault diagnostics messages."""
 
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Any, Iterable
+
+
+_FAULT_COUNT_PATTERN = re.compile(r"[0-9]+(?:\.0+)?")
+
+
+def parse_fault_count(value: Any) -> int | None:
+    """Parse a non-negative whole-number count from a ROS key-value string.
+
+    ROS bridges commonly format numeric diagnostic values as ``"1.000000"``.
+    Accept that representation while rejecting fractional, signed, and non-finite
+    values so a count remains an authoritative cardinality declaration.
+    """
+
+    text = str(value).strip()
+    if not _FAULT_COUNT_PATTERN.fullmatch(text):
+        return None
+    return int(text.partition(".")[0], 10)
 
 
 @dataclass(frozen=True)
@@ -40,9 +58,9 @@ class FaultTransition:
 
 
 class FaultLifecycleTracker:
-    """Track faults published through the string-native health contract.
+    """Track faults published through the string-native fault contract.
 
-    Only nodes whose final path segment is ``health`` participate. A valid
+    Only nodes whose final path segment is ``fault`` participate. A valid
     message contains exactly one ``fault_count`` value and zero or more repeated
     ``fault_report`` values. Reports are the complete active set, not deltas.
     """
@@ -52,7 +70,7 @@ class FaultLifecycleTracker:
         self._active_by_source: dict[tuple[str, str], set[str]] = {}
 
     def update(self, message: Any, recv_time: float) -> list[FaultTransition]:
-        if not self._is_health_node(message.node) or message.level == 3:
+        if not self._is_fault_node(message.node) or message.level == 3:
             return []
 
         reports, declared_count, valid = self._extract_reports(message.values)
@@ -118,9 +136,9 @@ class FaultLifecycleTracker:
         return transitions
 
     @staticmethod
-    def _is_health_node(node: Any) -> bool:
+    def _is_fault_node(node: Any) -> bool:
         parts = [part for part in str(node).split("/") if part]
-        return bool(parts) and parts[-1].lower() == "health"
+        return bool(parts) and parts[-1].lower() == "fault"
 
     @staticmethod
     def _event_stamp(source_stamp: Any, recv_time: float) -> float:
@@ -142,14 +160,14 @@ class FaultLifecycleTracker:
             if key == "fault_report":
                 report = cls._normalize_report(item.value)
                 if report is None:
-                    return set(), None, False
+                    # Fixed-size publisher slots are represented by an empty
+                    # ROS string when no fault is active.  Treat that as an
+                    # omitted report; a non-zero count still fails below.
+                    continue
                 reports.add(report)
             elif key == "fault_count":
-                try:
-                    count = int(str(item.value).strip(), 10)
-                except (TypeError, ValueError):
-                    return set(), None, False
-                if count < 0:
+                count = parse_fault_count(item.value)
+                if count is None:
                     return set(), None, False
                 counts.append(count)
 
